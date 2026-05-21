@@ -1,66 +1,82 @@
+import os
 import numpy as np
+from scipy.spatial.transform import Rotation as R
 
-# Import your tools from the other files!
-from subsetter import subset_visible_stars
-from projection import project_to_pixels
+from wheresat.coordinates import eci_to_body
+from wheresat.camera import generate_image
 
-def run_star_tracker_pipeline():
+# Route to the data folder from the root directory
+DATA_DIR = os.path.join(os.path.abspath(os.path.dirname(__file__)), "data")
+
+def run_star_tracker():
     print("--- 🚀 BOOTING STAR TRACKER FLIGHT SOFTWARE ---")
     
     # ---------------------------------------------------------
-    # STEP 1: Load the Universe (From dataset_builder.py output)
+    # STEP 1: Load the Universe
     # ---------------------------------------------------------
+    catalog_path = os.path.join(DATA_DIR, "optimized_catalog.npy")
     try:
-        catalog = np.load("optimized_catalog.npy")
-        print(f"[SYSTEM] Database loaded. Total stars: {len(catalog)}")
+        # Loaded format: [ID, X_eci, Y_eci, Z_eci, Magnitude]
+        catalog = np.load(catalog_path)
+        print(f"[SYSTEM] ECI Database loaded. Total stars: {len(catalog)}")
     except FileNotFoundError:
-        print("[ERROR] Cannot find optimized_catalog.npy! Run dataset_builder.py first.")
+        print(f"[ERROR] Cannot find {catalog_path}! Run catalog.py first.")
         return
 
     # ---------------------------------------------------------
-    # STEP 2: Receive Aditya's Output
+    # STEP 2: Simulate Satellite Orientation
     # ---------------------------------------------------------
-    # In Week 2, Aditya's ECI math will feed these numbers dynamically.
-    # For now, we simulate his output pointing at Orion.
-    current_ra = 85.0
-    current_dec = -1.0
-    camera_fov = 12.0
-    camera_width = 1024
-    print(f"[SYSTEM] Aditya's Math indicates camera pointing at RA {current_ra}°, Dec {current_dec}°")
-
-    # ---------------------------------------------------------
-    # STEP 3: The Spatial Filter (subsetter.py)
-    # ---------------------------------------------------------
-    # We pass the massive catalog in, and catch the tiny list of visible stars
-    print("[SYSTEM] Running Spatial Filter...")
-    visible_stars = subset_visible_stars(catalog, current_ra, current_dec, camera_fov)
-    print(f"[SYSTEM] Filter complete. Found {len(visible_stars)} stars in the camera's view.")
+    # Generate a random attitude quaternion to test the math
+    random_rot = R.random()
+    sat_quaternion = random_rot.as_quat()
+    print(f"[SYSTEM] Satellite orientation (quaternion): {sat_quaternion.round(4)}")
     
-    if len(visible_stars) == 0:
-        print("[SYSTEM] Camera is pointing at empty space. Shutting down.")
-        return
+    camera_width = 1024
+    camera_fov = 12.0
+    print(f"[SYSTEM] Camera specs: {camera_width}x{camera_width} px, FOV: {camera_fov}°")
 
     # ---------------------------------------------------------
-    # STEP 4: The Math Crusher (projection.py)
+    # STEP 3: The Math Crusher (Coordinate Transformation)
     # ---------------------------------------------------------
-    # We pass the output of Step 3 DIRECTLY into the input of Step 4
-    print("[SYSTEM] Running Gnomonic Projection Engine...")
-    pixel_coordinates = project_to_pixels(visible_stars, current_ra, current_dec, camera_width, camera_fov)
-    print("[SYSTEM] Projection complete. 3D coordinates crushed to 2D pixels.")
+    print("[SYSTEM] Rotating universe into camera body frame...")
+    
+    # Extract just the X, Y, Z columns to feed into your math
+    eci_vectors = catalog[:, 1:4]
+    
+    # Push through your math module
+    body_vectors = eci_to_body(eci_vectors, sat_quaternion)
+    
+    # Re-pack the array with IDs and Magnitudes for the camera
+    body_data = np.column_stack((
+        catalog[:, 0],      # ID
+        body_vectors,       # X_body, Y_body, Z_body
+        catalog[:, 4]       # Magnitude
+    ))
 
     # ---------------------------------------------------------
-    # STEP 5: Final Output Validation
+    # STEP 4: The Camera Sensor (Projection)
     # ---------------------------------------------------------
-    print("\n--- FINAL CAMERA PIXELS ---")
-    print("ID\tX_PIXEL\t\tY_PIXEL\t\tMAGNITUDE")
-    print("-" * 50)
-    for i in range(len(pixel_coordinates)):
-        s_id = int(pixel_coordinates[i, 0])
-        x = pixel_coordinates[i, 1]
-        y = pixel_coordinates[i, 2]
-        mag = pixel_coordinates[i, 3]
-        print(f"{s_id}\t{x:.2f}\t\t{y:.2f}\t\t{mag:.2f}")
+    print("[SYSTEM] Projecting 3D body vectors onto 2D sensor...")
+    pixels = generate_image(body_data, camera_width, camera_fov)
+    
+    print(f"[SYSTEM] Projection complete. Captured {len(pixels)} visible stars.")
 
-# Run the software
+    # ---------------------------------------------------------
+    # STEP 5: Output
+    # ---------------------------------------------------------
+    if len(pixels) == 0:
+        print("\n[SYSTEM] Camera is pointing at deep, empty space. No stars captured.")
+    else:
+        print("\n--- FINAL CAMERA SENSOR OUTPUT ---")
+        print("ID\tX_PIXEL\t\tY_PIXEL\t\tMAGNITUDE")
+        print("-" * 55)
+        # Just print the first 10 so we don't flood the terminal
+        for i in range(min(10, len(pixels))):
+            s_id = int(pixels[i, 0])
+            x = pixels[i, 1]
+            y = pixels[i, 2]
+            mag = pixels[i, 3]
+            print(f"{s_id}\t{x:.2f}\t\t{y:.2f}\t\t{mag:.2f}")
+
 if __name__ == "__main__":
-    run_star_tracker_pipeline()
+    run_star_tracker()
