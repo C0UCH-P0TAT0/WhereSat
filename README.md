@@ -1,7 +1,8 @@
 # Stellar Attitude Determination Pipeline
 
 ## 🛰️ Objective
-[cite_start]This project implements a complete, closed-loop star tracker simulation pipeline in Python[cite: 89]. [cite_start]Designed as a benchmarking tool to characterize attitude-solving algorithms under realistic hardware conditions, it handles everything from synthetic sensor image generation through to spacecraft attitude output[cite: 90, 91, 92]. 
+This project implements a complete, closed-loop star tracker simulation pipeline in Python.
+Designed as a benchmarking tool to characterize attitude-solving algorithms under realistic hardware conditions, it handles everything from synthetic sensor image generation through to spacecraft attitude output. 
 
 The current architecture simulates a 3D coordinate universe, projects it onto a 2D sensor array, and strictly models the optical physics and electrical noise of a space-rated analog sensor.
 
