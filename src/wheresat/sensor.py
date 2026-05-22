@@ -52,7 +52,7 @@ def save_and_visualize(image_array: np.ndarray, ground_truth_pixels: np.ndarray,
     
     # Draw the noisy hardware image. 
     # origin='upper' is REQUIRED so (0,0) is at the top-left!
-    plt.imshow(image_array, cmap='gray', origin='upper', vmin=0, vmax=10000)
+    plt.imshow(image_array, cmap='gray', origin='upper', vmin=0, vmax=500)
     
     # Overlay the red ground-truth targeting circles
     if len(ground_truth_pixels) > 0:
