@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.optimize import curve_fit
+from scipy.ndimage import median_filter
 
 def gaussian_2d(coords, A, x0, y0, sigma_x, sigma_y, B):
     x, y = coords
@@ -9,9 +10,10 @@ def gaussian_2d(coords, A, x0, y0, sigma_x, sigma_y, B):
 
 def extract_centroids_gaussian(image_array: np.ndarray, com_centroids: np.ndarray) -> np.ndarray:
     centroids = []
-    pad = 3  
+    pad = 5  
 
     for com in com_centroids:
+        # 1. We ONLY use Aditya's data to cut the box. We do not trust his math.
         cx = int(np.round(com[0]))
         cy = int(np.round(com[1]))
         
@@ -20,10 +22,13 @@ def extract_centroids_gaussian(image_array: np.ndarray, com_centroids: np.ndarra
         y_min = max(0, cy - pad)
         y_max = min(image_array.shape[0], cy + pad + 1)
         
-        patch = image_array[y_min:y_max, x_min:x_max]
+        raw_patch = image_array[y_min:y_max, x_min:x_max]
         
-        if patch.shape[0] < 3 or patch.shape[1] < 3:
+        if raw_patch.shape[0] < 3 or raw_patch.shape[1] < 3:
             continue
+
+        # 2. Yash's Radiation Shield: Clean the hardware static
+        patch = median_filter(raw_patch, size=3)
 
         x_range = np.arange(x_min, x_max)
         y_range = np.arange(y_min, y_max)
@@ -32,9 +37,13 @@ def extract_centroids_gaussian(image_array: np.ndarray, com_centroids: np.ndarra
         coords = (x_grid.ravel(), y_grid.ravel())
         pixel_values = patch.ravel()
 
+        # ---------------------------------------------------------
+        # 3. YASH'S PURE MATHEMATICAL GUESS (100% Independent)
+        # ---------------------------------------------------------
         background_guess = np.min(patch)
         amplitude_guess = np.max(patch) - background_guess
         
+        # Because the patch is clean, argmax is now safe to use!
         brightest_idx = np.argmax(patch)
         x0_guess = coords[0][brightest_idx]
         y0_guess = coords[1][brightest_idx]
@@ -42,10 +51,39 @@ def extract_centroids_gaussian(image_array: np.ndarray, com_centroids: np.ndarra
         
         p0 = [amplitude_guess, x0_guess, y0_guess, sigma_guess, sigma_guess, background_guess]
 
+        # ---------------------------------------------------------
+        # 4. YASH'S PURE BOUNDARIES
+        # We leash the optimizer to YOUR guess, not Aditya's.
+        # ---------------------------------------------------------
+        lower_bounds = [
+            0.0,             
+            x0_guess - 2.0,  # Bound to Yash's guess
+            y0_guess - 2.0,  # Bound to Yash's guess
+            0.5,             
+            0.5,             
+            0.0              
+        ]
+
+        upper_bounds = [
+            65535.0,         
+            x0_guess + 2.0,  # Bound to Yash's guess
+            y0_guess + 2.0,  # Bound to Yash's guess
+            3.0,             
+            3.0,             
+            65535.0          
+        ]
+
         try:
-            popt, _ = curve_fit(gaussian_2d, coords, pixel_values, p0=p0, maxfev=2000)
+            popt, _ = curve_fit(
+                gaussian_2d, 
+                coords, 
+                pixel_values, 
+                p0=p0, 
+                bounds=(lower_bounds, upper_bounds), 
+                maxfev=2000
+            )
             centroids.append([popt[1], popt[2]])
-        except RuntimeError:
+        except (RuntimeError, ValueError):
             continue
 
     return np.array(centroids)

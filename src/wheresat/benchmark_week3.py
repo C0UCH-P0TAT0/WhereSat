@@ -1,4 +1,3 @@
-import os
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.spatial.distance import cdist
@@ -9,6 +8,7 @@ from wheresat.coordinates import eci_to_body
 from wheresat.camera import generate_image
 from wheresat.renderer import render_star_field
 from wheresat.sensor import apply_sensor_dirt
+from pathlib import Path
 
 # Import the Week 3 algorithms
 # pyrefly: ignore [missing-import]
@@ -33,8 +33,8 @@ def calculate_centroid_error(calculated_centroids: np.ndarray, truth_pixels: np.
 def plot_snr_vs_error():
     print("--- 🚀 INITIATING ALGORITHM BENCHMARK ---")
     
-    catalog_path = os.path.join(os.path.abspath(os.path.dirname(__file__)), "data", "optimized_catalog.npy")
-    catalog = np.load(catalog_path)
+    catalog_path = Path(__file__).resolve().parents[2] / "data" / "optimized_catalog.npy"
+    catalog = np.load(str(catalog_path))
     eci_vectors = catalog[:, 1:4]
     
     camera_width = 1024
@@ -61,7 +61,10 @@ def plot_snr_vs_error():
         clean_image = render_star_field(truth_pixels, camera_width, sigma=1.5)
         dirty_image = apply_sensor_dirt(clean_image, readout_sigma=noise, hot_pixel_fraction=0.001)
 
-        com_centroids = extract_centroids(dirty_image, threshold=200)
+        # THE FIX: Dynamic thresholding scales with the noise floor (4 sigma)
+        dynamic_threshold = int(noise * 4)
+
+        com_centroids = extract_centroids(dirty_image, threshold=dynamic_threshold)
         gaussian_centroids = extract_centroids_gaussian(dirty_image, com_centroids)
 
         err_com = calculate_centroid_error(com_centroids, truth_pixels)
@@ -73,7 +76,7 @@ def plot_snr_vs_error():
     plt.figure(figsize=(10, 6))
     
     plt.plot(noise_levels, gaussian_errors, marker='o', color='blue', linewidth=2, label='2D Gaussian Fit (Yash)')
-    plt.plot(noise_levels, com_errors, marker='x', color='red', linewidth=2, linestyle='--', label='Center of Mass (Malpani)')
+    plt.plot(noise_levels, com_errors, marker='x', color='red', linewidth=2, linestyle='--', label='Center of Mass (Aditya)')
     
     plt.title('Star Tracker Algorithm Robustness: Error vs. Camera Noise', fontsize=14, fontweight='bold')
     plt.xlabel('Camera Readout Noise (Sigma)', fontsize=12)
@@ -82,8 +85,14 @@ def plot_snr_vs_error():
     plt.legend(fontsize=12)
     plt.ylim(bottom=0)
     
-    plt.savefig('algorithm_benchmark_results.png', bbox_inches='tight')
-    print("\n[SYSTEM] Benchmark Complete. Graph saved.")
+    # ---------------------------------------------------------
+    # THE FIX: Route the saved image directly into the data folder
+    # ---------------------------------------------------------
+    data_dir = Path(__file__).resolve().parents[2] / "data"
+    output_path = data_dir / 'algorithm_benchmark_results.png'
+    
+    plt.savefig(str(output_path), bbox_inches='tight')
+    print(f"\n[SYSTEM] Benchmark Complete. Graph saved to: {output_path}")
 
 if __name__ == "__main__":
     plot_snr_vs_error()
