@@ -1,44 +1,44 @@
 import numpy as np
-from scipy.ndimage import binary_opening, label, center_of_mass
+from scipy.ndimage import label, center_of_mass
 
 def extract_centroids(image_array: np.ndarray, threshold: int = 200) -> np.ndarray:
     """
-    Strips hardware noise and calculates Center of Mass (CoM) for surviving star blobs.
-    
-    Args:
-        image_array: 2D uint16 array (the dirty sensor image)
-        threshold: The ADU cutoff to delete readout noise
-        
-    Returns:
-        Nx2 array of [X, Y] sub-pixel centroid coordinates
+    Strips hardware noise, filters hot pixels by area, and calculates true CoM.
     """
-    # 1. The Global Guillotine (Readout Noise)
-    # Nuke the baseline static. Anything below 200 ADU becomes pure black (0).
-    thresholded = np.where(image_array > threshold, image_array, 0)
+    # 1. The Global Guillotine
+    mask = image_array > threshold
     
-    # 2. Morphological Opening (Hot Pixels)
-    # We define a 3x3 structuring element. 
-    # Hot pixels are isolated 1x1 spikes. The opening operation (erosion followed by dilation)
-    # physically deletes anything smaller than 3x3. Hot pixels vanish. Stars survive.
-    structure = np.ones((3, 3), dtype=bool)
-    mask = thresholded > 0
-    clean_mask = binary_opening(mask, structure=structure)
-    
-    # Re-apply the surviving mask to the actual pixel intensities
-    cleaned_image = thresholded * clean_mask
-    
-    # 3. Blob Detection
-    # Group connected lit pixels into distinct, numbered clusters
-    labeled_array, num_features = label(clean_mask)
+    # 2. Blob Detection (Group connected pixels)
+    labeled_array, num_features = label(mask)
     
     centroids = []
     if num_features > 0:
-        # 4. Center of Mass
-        # ndimage computes the intensity-weighted center of each isolated blob
-        # Returns a list of (Y, X) tuples because arrays are row-major
-        coms = center_of_mass(cleaned_image, labeled_array, range(1, num_features + 1))
+        # Get the physical pixel area of each detected blob
+        # bincount is highly optimized; index corresponds to the blob label ID
+        blob_sizes = np.bincount(labeled_array.ravel())
         
-        for (y, x) in coms:
-            centroids.append([x, y])  # Swap back to standard Cartesian [X, Y]
+        # 3. The DC Offset Fix
+        # Subtract the noise floor so CoM only calculates true photon intensity.
+        # Cast to float32 to prevent uint16 underflow (e.g., 0 - 200)
+        true_intensity = np.where(mask, image_array.astype(np.float32) - threshold, 0)
+        
+        # 4. Filter and Calculate
+        valid_labels = []
+        for i in range(1, num_features + 1):
+            # The Hot Pixel Filter: Nuke anything that is exactly 1 pixel in size
+            if blob_sizes[i] > 1:
+                valid_labels.append(i)
+                
+        if valid_labels:
+            # Calculate CoM only on the surviving, background-subtracted stars
+            coms = center_of_mass(true_intensity, labeled_array, valid_labels)
             
+            # Scipy returns a single tuple if valid_labels has 1 element, 
+            # otherwise a list of tuples. We force it to a list for safe iteration.
+            if not isinstance(coms, list):
+                coms = [coms]
+                
+            for (y, x) in coms:
+                centroids.append([x, y])
+                
     return np.array(centroids)
