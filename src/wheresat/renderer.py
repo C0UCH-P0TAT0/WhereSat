@@ -54,10 +54,12 @@ def render_star_field(visible_stars: np.ndarray, width: int, sigma: float = 1.5,
         # Accumulate the light onto the main image
         image[y_min:y_max, x_min:x_max] += gaussian
 
-    # 5. Quantum Photon Noise
+    # 5. Quantum Photon Noise & Full Well Capacity
     # Poisson simulates the random arrival of photons. 
-    # Negative inputs crash it, so we clip at 0 first.
-    image = np.clip(image, 0, None)
+    # We clip the canvas at 1,000,000 to represent the absolute physical capacity 
+    # of the pixel bucket. This prevents corrupted "-99 magnitude" ghost stars 
+    # from crashing the Poisson lambda calculator.
+    image = np.clip(image, 0, 1000000.0)
     image = np.random.poisson(image).astype(np.float64)
     
     # 6. Sensor Saturation (16-bit ceiling)

@@ -49,47 +49,29 @@ def identify_stars(
     triangle_id_map: np.ndarray,
     tolerance: float = 1e-4
 ) -> np.ndarray:
-    """
-    Step 3: The Match Engine
-    Takes unknown 2D centroids, builds triangles, and queries the database.
     
-    Args:
-        centroids: Nx2 array of [X, Y] sub-pixel coordinates.
-        camera_width: The width of the sensor in pixels.
-        camera_fov: The field of view in degrees.
-        kd_tree: The pre-built SciPy KD-Tree containing all catalog triangles.
-        triangle_id_map: An array linking KD-Tree indices to absolute Hipparcos IDs.
-        tolerance: How strictly the angles must match (radians) to be considered a success.
-        
-    Returns:
-        An array of Hipparcos IDs for the identified stars.
-    """
     vectors = pixels_to_vectors(centroids, camera_width, camera_fov)
     num_stars = len(vectors)
     
     if num_stars < 3:
-        # A triangle requires 3 stars. The satellite is blind.
         return np.array([]) 
         
-    # Generate all possible 3-star combinations from the camera image
+    # 1. Initialize an empty set to prevent duplicate ID logging
+    identified_unique_stars = set()
+        
     for indices in itertools.combinations(range(num_stars), 3):
         v1 = vectors[indices[0]]
         v2 = vectors[indices[1]]
         v3 = vectors[indices[2]]
         
-        # Get the [Short, Medium, Long] fingerprint for this specific triangle
         fingerprint = calculate_triangle_fingerprint(v1, v2, v3)
-        
-        # Query the K-D Tree to find the 1 absolute closest match in the universe
         distance, tree_idx = kd_tree.query(fingerprint, k=1)
         
-        # If the math matches within our strict mathematical tolerance, it is a hit!
         if distance < tolerance:
-            # Retrieve the true Hipparcos IDs using the tree index
             matched_ids = triangle_id_map[tree_idx]
             
-            # Return the exact IDs of the stars the camera is looking at
-            return np.array(matched_ids)
+            # 2. Accumulate the hits. DO NOT RETURN EARLY.
+            identified_unique_stars.update(matched_ids)
             
-    return np.array([]) # No matches found in the entire image
-
+    # 3. Cast the final set back to an array after checking the whole image
+    return np.array(list(identified_unique_stars))
