@@ -47,12 +47,22 @@ def run_closed_loop_test(num_iterations: int = 10):
         
         # Generate mathematical ground truth
         truth_pixels = generate_image(body_data, camera_width, camera_fov)
-        if len(truth_pixels) < 3:
-            print("   -> Staring at empty space. Skipping.")
+        
+        # --- THE FIX: HONEST METRICS ---
+        # The database only knows stars brighter than Mag 4.5.
+        # We cannot penalize the ID engine for missing Mag 6.0 background noise.
+        # truth_pixels format: [ID, X Pixel, Y Pixel, Magnitude]
+        guide_star_mask = truth_pixels[:, 3] <= 4.5
+        observable_guide_stars = truth_pixels[guide_star_mask]
+        
+        true_guide_ids = set(observable_guide_stars[:, 0])
+        
+        # If there are fewer than 3 Guide Stars in the FOV, the satellite is legitimately blind.
+        if len(true_guide_ids) < 3:
+            print("   -> Sparse star field (Under 3 Guide Stars). Skipping.")
             continue
             
-        true_ids = set(truth_pixels[:, 0])
-        total_stars_tested += len(true_ids)
+        total_stars_tested += len(true_guide_ids)
         
         # Phase B: The Degraded Sensor
         clean_image = render_star_field(truth_pixels, camera_width, sigma=1.5)
@@ -63,8 +73,25 @@ def run_closed_loop_test(num_iterations: int = 10):
         com_centroids = extract_centroids(dirty_image, threshold=dynamic_threshold)
         gaussian_centroids = extract_centroids_gaussian(dirty_image, com_centroids)
         
+        # --- THE PATH 2 FIX: HARDWARE BRIGHTNESS FILTER ---
+        # We cap the compute load. Sort all extracted centroids by their peak photon intensity and strictly pass only the top 10 brightest stars.
+        if len(gaussian_centroids) > 0:
+            # Safely grab the integer pixel coordinates for the centroids
+            x_coords = np.clip(np.round(gaussian_centroids[:, 0]).astype(int), 0, camera_width - 1)
+            y_coords = np.clip(np.round(gaussian_centroids[:, 1]).astype(int), 0, camera_width - 1)
+            
+            # Sample the raw ADU intensities from the dirty hardware image
+            intensities = dirty_image[y_coords, x_coords]
+            
+            # Sort descending (brightest first)
+            sorted_indices = np.argsort(intensities)[::-1]
+            
+            # The Compute Cap: 10 stars max = 120 triangles. O(1) time complexity limit.
+            max_stars = 10
+            gaussian_centroids = gaussian_centroids[sorted_indices[:max_stars]]
+
         if len(gaussian_centroids) < 3:
-            print("   -> [FAIL] Sensor blackout. Could not extract 3+ stars.")
+            print("   -> [FAIL] Sensor blackout. Could not extract 3+ valid guide stars.")
             continue
             
         # Phase D: Yash's Star ID Engine
@@ -78,14 +105,14 @@ def run_closed_loop_test(num_iterations: int = 10):
         )
         
         # Phase E: The Grading
-        matches = set(identified_ids).intersection(true_ids)
+        matches = set(identified_ids).intersection(true_guide_ids)
         total_stars_identified += len(matches)
         
         if len(matches) >= 3:
             success_count += 1
-            print(f"   -> [PASS] Attitude Locked. Identified {len(matches)}/{len(true_ids)} stars.")
+            print(f"   -> [PASS] Attitude Locked. Identified {len(matches)}/{len(true_guide_ids)} stars.")
         else:
-            print(f"   -> [FAIL] Lost in Space. Only identified {len(matches)}/{len(true_ids)} stars.")
+            print(f"   -> [FAIL] Lost in Space. Only identified {len(matches)}/{len(true_guide_ids)} stars.")
 
     # Final Metrics
     print("\n==========================================")
