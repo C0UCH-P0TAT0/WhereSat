@@ -1,6 +1,7 @@
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 from wheresat.quest import compute_attitude_quest
+from wheresat.triad import compute_attitude_triad
 
 def calculate_quaternion_error(q_true: np.ndarray, q_est: np.ndarray) -> float:
     """
@@ -65,5 +66,31 @@ def run_quest_proving_ground():
     else:
         print("\n[VERDICT] 🔴 QUEST FAILED. Algorithm cannot handle hardware degradation.")
 
+    # 5. Phase 4: The Drag Race (QUEST vs. TRIAD)
+    print(f"\n[Phase 4: The Drag Race (QUEST vs. TRIAD)]")
+    
+    # TRIAD mathematically cannot handle more than 2 vectors.
+    # We slice the array to simulate the system grabbing the 2 brightest guide stars.
+    triad_eci = eci_vectors[:2]
+    triad_body = noisy_body_vectors[:2]
+    
+    # Run Yash's Engine
+    triad_dcm = compute_attitude_triad(triad_eci, triad_body)
+    
+    # Check for the identity matrix hallucination
+    if np.array_equal(triad_dcm, np.eye(3)):
+        print("   -> [FAIL] TRIAD choked and returned an Identity hallucination.")
+    else:
+        # Convert TRIAD's Direction Cosine Matrix to a SciPy Quaternion for a 1:1 comparison
+        triad_quat = R.from_matrix(triad_dcm).as_quat()
+        triad_error = calculate_quaternion_error(true_quat, triad_quat)
+        
+        print(f"TRIAD Error (2 stars):   {triad_error:.6f} degrees")
+        print(f"QUEST Error (15 stars):  {noisy_error:.6f} degrees")
+        
+        if noisy_error < triad_error:
+            print("\n[VERDICT] 🟢 QUEST WINS. Least-Squares estimation dominates deterministic math.")
+        else:
+            print("\n[VERDICT] 🔴 TRIAD WINS. Something is mathematically broken in your K-Matrix.")
 if __name__ == "__main__":
     run_quest_proving_ground()
