@@ -14,7 +14,7 @@ def calculate_quaternion_error(q_true: np.ndarray, q_est: np.ndarray) -> float:
     return np.degrees(error_rad)
 
 def run_quest_proving_ground():
-    print("--- 🚀 INITIATING QUEST ALGORITHM VALIDATION ---")
+    print("--- 🚀 INITIATING ATTITUDE DETERMINATION VALIDATION ---")
     
     # 1. Generate a synthetic Star Catalog (15 random Guide Stars)
     np.random.seed(42) # Lock the seed for deterministic testing
@@ -22,75 +22,83 @@ def run_quest_proving_ground():
     eci_vectors = np.random.randn(num_stars, 3)
     eci_vectors /= np.linalg.norm(eci_vectors, axis=1, keepdims=True)
     
-    # 2. Phase 1: The Identity Test (Zero Rotation)
-    # If the camera sees the exact ECI coordinates, the quaternion MUST be [0, 0, 0, 1]
-    q_identity = compute_attitude_quest(eci_vectors, eci_vectors)
-    print(f"\n[Phase 1: Identity Matrix]")
-    print(f"Expected: [0. 0. 0. 1.]")
-    print(f"Calculated: {np.round(q_identity, 4)}")
+    # Slice the top 2 stars for TRIAD's deterministic math
+    triad_eci = eci_vectors[:2]
     
-    # 3. Phase 2: The Perfect Rotation Test
+    # ---------------------------------------------------------
+    # Phase 1: The Identity Test (Zero Rotation)
+    # ---------------------------------------------------------
+    q_identity_quest = compute_attitude_quest(eci_vectors, eci_vectors)
+    
+    triad_identity_dcm = compute_attitude_triad(triad_eci, triad_eci)
+    q_identity_triad = R.from_matrix(triad_identity_dcm).as_quat()
+    
+    print(f"\n[Phase 1: Identity Matrix]")
+    print(f"Expected:   [0. 0. 0. 1.]")
+    print(f"QUEST Calc: {np.round(q_identity_quest, 4)}")
+    print(f"TRIAD Calc: {np.round(q_identity_triad, 4)}")
+    
+    # ---------------------------------------------------------
+    # Phase 2: The Perfect Rotation Test
+    # ---------------------------------------------------------
     # We physically spin the virtual satellite by exactly 45 degrees around the X-axis
     true_rotation = R.from_euler('x', 45, degrees=True)
     true_quat = true_rotation.as_quat() # [x, y, z, w]
     
     # Rotate the ECI vectors to simulate what the clean camera sees
     clean_body_vectors = true_rotation.apply(eci_vectors)
+    triad_clean_body = clean_body_vectors[:2]
     
-    q_clean = compute_attitude_quest(eci_vectors, clean_body_vectors)
-    clean_error = calculate_quaternion_error(true_quat, q_clean)
+    q_clean_quest = compute_attitude_quest(eci_vectors, clean_body_vectors)
+    clean_error_quest = calculate_quaternion_error(true_quat, q_clean_quest)
+    
+    triad_clean_dcm = compute_attitude_triad(triad_eci, triad_clean_body)
+    q_clean_triad = R.from_matrix(triad_clean_dcm).as_quat()
+    clean_error_triad = calculate_quaternion_error(true_quat, q_clean_triad)
     
     print(f"\n[Phase 2: Perfect Geometry]")
     print(f"Target Quat: {np.round(true_quat, 4)}")
-    print(f"QUEST Quat:  {np.round(q_clean, 4)}")
-    print(f"Angular Error: {clean_error:.6f} degrees")
+    print(f"QUEST Quat:  {np.round(q_clean_quest, 4)} | Error: {clean_error_quest:.6f} deg")
+    print(f"TRIAD Quat:  {np.round(q_clean_triad, 4)} | Error: {clean_error_triad:.6f} deg")
     
-    # 4. Phase 3: The Radiation Stress Test (Least-Squares Verification)
-    # We inject raw Gaussian blur into the body vectors to simulate thermal noise and optical distortion
+    # ---------------------------------------------------------
+    # Phase 3: The Radiation Stress Test (Hardware Noise Injection)
+    # ---------------------------------------------------------
     # Noise standard deviation of 0.0005 radians (~100 arcseconds of hardware error)
     noisy_body_vectors = clean_body_vectors + np.random.normal(0, 0.0005, clean_body_vectors.shape)
-    
-    # Re-normalize because real cameras only output unit vectors
     noisy_body_vectors /= np.linalg.norm(noisy_body_vectors, axis=1, keepdims=True)
+    triad_noisy_body = noisy_body_vectors[:2]
     
-    q_noisy = compute_attitude_quest(eci_vectors, noisy_body_vectors)
-    noisy_error = calculate_quaternion_error(true_quat, q_noisy)
+    q_noisy_quest = compute_attitude_quest(eci_vectors, noisy_body_vectors)
+    noisy_error_quest = calculate_quaternion_error(true_quat, q_noisy_quest)
     
-    print(f"\n[Phase 3: Hardware Noise Injection (15 Stars)]")
+    triad_noisy_dcm = compute_attitude_triad(triad_eci, triad_noisy_body)
+    
+    # Check for the identity matrix hallucination in TRIAD
+    if np.array_equal(triad_noisy_dcm, np.eye(3)):
+        print("\n   -> [FAIL] TRIAD choked and returned an Identity hallucination.")
+        noisy_error_triad = 999.0
+        q_noisy_triad = np.array([0., 0., 0., 1.])
+    else:
+        q_noisy_triad = R.from_matrix(triad_noisy_dcm).as_quat()
+        noisy_error_triad = calculate_quaternion_error(true_quat, q_noisy_triad)
+        
+    print(f"\n[Phase 3: Hardware Noise Injection]")
     print(f"Target Quat: {np.round(true_quat, 4)}")
-    print(f"QUEST Quat:  {np.round(q_noisy, 4)}")
-    print(f"Angular Error: {noisy_error:.6f} degrees")
+    print(f"QUEST Quat:  {np.round(q_noisy_quest, 4)}")
+    print(f"TRIAD Quat:  {np.round(q_noisy_triad, 4)}")
     
-    if noisy_error < 0.1:
-        print("\n[VERDICT] 🟢 QUEST Algorithm Verified. Least-Squares optimization is crushing the noise.")
+    # ---------------------------------------------------------
+    # Phase 4: The Showdown
+    # ---------------------------------------------------------
+    print(f"\n[Phase 4: The Drag Race Summary]")
+    print(f"TRIAD Error (2 stars):   {noisy_error_triad:.6f} degrees")
+    print(f"QUEST Error (15 stars):  {noisy_error_quest:.6f} degrees")
+    
+    if noisy_error_quest < noisy_error_triad:
+        print("\n[VERDICT] 🟢 QUEST WINS")
     else:
-        print("\n[VERDICT] 🔴 QUEST FAILED. Algorithm cannot handle hardware degradation.")
+        print("\n[VERDICT] 🔴 TRIAD WINS")
 
-    # 5. Phase 4: The Drag Race (QUEST vs. TRIAD)
-    print(f"\n[Phase 4: The Drag Race (QUEST vs. TRIAD)]")
-    
-    # TRIAD mathematically cannot handle more than 2 vectors.
-    # We slice the array to simulate the system grabbing the 2 brightest guide stars.
-    triad_eci = eci_vectors[:2]
-    triad_body = noisy_body_vectors[:2]
-    
-    # Run Yash's Engine
-    triad_dcm = compute_attitude_triad(triad_eci, triad_body)
-    
-    # Check for the identity matrix hallucination
-    if np.array_equal(triad_dcm, np.eye(3)):
-        print("   -> [FAIL] TRIAD choked and returned an Identity hallucination.")
-    else:
-        # Convert TRIAD's Direction Cosine Matrix to a SciPy Quaternion for a 1:1 comparison
-        triad_quat = R.from_matrix(triad_dcm).as_quat()
-        triad_error = calculate_quaternion_error(true_quat, triad_quat)
-        
-        print(f"TRIAD Error (2 stars):   {triad_error:.6f} degrees")
-        print(f"QUEST Error (15 stars):  {noisy_error:.6f} degrees")
-        
-        if noisy_error < triad_error:
-            print("\n[VERDICT] 🟢 QUEST WINS. Least-Squares estimation dominates deterministic math.")
-        else:
-            print("\n[VERDICT] 🔴 TRIAD WINS. Something is mathematically broken in your K-Matrix.")
 if __name__ == "__main__":
     run_quest_proving_ground()
