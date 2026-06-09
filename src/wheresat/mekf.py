@@ -4,86 +4,87 @@ from scipy.spatial.transform import Rotation as R
 class MEKF:
     def __init__(self, initial_q: np.ndarray, initial_cov: float = 0.1):
         """
-        Multiplicative Extended Kalman Filter for 4D Quaternion fusion.
+        6-State Multiplicative Extended Kalman Filter.
+        Estimates both Attitude (Quaternion) and Gyroscope Drift (Bias).
         """
-        # Ensure q is scalar-last [x, y, z, w]
         self.q = initial_q / np.linalg.norm(initial_q)
         
-        # 3x3 Covariance Matrix (tracking error in 3D tangent space)
-        self.P = np.eye(3) * initial_cov
+        # New State: The estimated Gyroscope Bias (starts at 0)
+        self.beta = np.zeros(3) 
         
-        # Gyroscope Process Noise (How much we trust the gyro)
-        self.Q = np.eye(3) * 1e-5
+        # 6x6 Covariance Matrix
+        # [Top Left 3x3]: Attitude Error
+        # [Bottom Right 3x3]: Gyro Bias Error
+        self.P = np.eye(6) * initial_cov
+        self.P[3:, 3:] = np.eye(3) * 0.01 # Initial bias uncertainty
         
-    def predict(self, omega: np.ndarray, dt: float):
-        """
-        Propagates the state forward using high-speed Gyroscope rates.
-        """
-        # 1. Quaternion Kinematics (Propagate the 4D state)
-        omega_norm = np.linalg.norm(omega)
+        # Process Noise 
+        self.sigma_v = 1e-4  # Gyroscope white noise
+        self.sigma_u = 1e-6  # Bias random walk (how fast thermal drift changes)
+        
+    def predict(self, omega_meas: np.ndarray, dt: float):
+        """ Propagates the state forward using bias-corrected Gyroscope rates. """
+        # 1. Correct the raw hardware reading using our internal bias estimate
+        omega_est = omega_meas - self.beta
+        
+        # 2. Quaternion Kinematics
+        omega_norm = np.linalg.norm(omega_est)
         if omega_norm > 1e-8:
-            angle = omega_norm * dt
-            axis = omega / omega_norm
-            # Create a delta rotation quaternion
-            dq = R.from_rotvec(axis * angle).as_quat()
+            dq = R.from_rotvec((omega_est / omega_norm) * (omega_norm * dt)).as_quat()
+            self.q = (R.from_quat(self.q) * R.from_quat(dq)).as_quat()
             
-            # Multiply current state by delta (Hamilton convention)
-            r_current = R.from_quat(self.q)
-            r_delta = R.from_quat(dq)
-            self.q = (r_current * r_delta).as_quat()
-            
-        # 2. Covariance Propagation (Propagate the 3D error bounds)
-        # For small dt, the state transition matrix Phi is approximated via Rodrigues
-        wx, wy, wz = omega
+        # 3. State Transition Matrix (Phi) - 6x6
+        # Calculates how current errors propagate into future errors
+        wx, wy, wz = omega_est
         Omega_cross = np.array([
             [0, -wz, wy],
             [wz, 0, -wx],
             [-wy, wx, 0]
         ])
-        Phi = np.eye(3) - (Omega_cross * dt)
         
-        self.P = Phi @ self.P @ Phi.T + (self.Q * dt)
+        Phi = np.eye(6)
+        Phi[0:3, 0:3] = np.eye(3) - (Omega_cross * dt)
+        Phi[0:3, 3:6] = -np.eye(3) * dt # Gyro bias directly degrades attitude over time
+        
+        # 4. Process Noise Covariance (Q) - 6x6
+        Q = np.zeros((6, 6))
+        Q[0:3, 0:3] = np.eye(3) * (self.sigma_v**2) * dt
+        Q[3:6, 3:6] = np.eye(3) * (self.sigma_u**2) * dt
+        
+        # 5. Propagate Covariance
+        self.P = Phi @ self.P @ Phi.T + Q
         
     def update(self, q_meas: np.ndarray, R_noise: np.ndarray):
-        """
-        Corrects the drifting gyro state using an absolute Star Tracker measurement.
-        """
-        # 1. Calculate Error Quaternion: q_err = q_pred^-1 * q_meas
-        r_pred_inv = R.from_quat(self.q).inv()
-        r_meas = R.from_quat(q_meas)
-        q_err = (r_pred_inv * r_meas).as_quat() # [ex, ey, ez, ew]
-        
-        # Force shortest path (prevent 359 degree corrections)
+        """ Corrects attitude and deduces gyro bias using Star Tracker data. """
+        # 1. Error Quaternion
+        q_err = (R.from_quat(self.q).inv() * R.from_quat(q_meas)).as_quat()
         if q_err[3] < 0:
             q_err = -q_err
-            
-        # Extract the 3D error vector (approx 2 * vector component for small angles)
         error_vector = 2.0 * q_err[:3]
         
-        # 2. Calculate Kalman Gain
-        # H is the measurement matrix. Since we directly measure attitude, H is the Identity matrix.
-        H = np.eye(3)
+        # 2. Measurement Matrix (H) - 3x6
+        # We only have a camera, so we only directly measure attitude (first 3 states)
+        H = np.zeros((3, 6))
+        H[0:3, 0:3] = np.eye(3)
+        
+        # 3. Kalman Gain (6x3)
         S = H @ self.P @ H.T + R_noise
         K = self.P @ H.T @ np.linalg.inv(S)
         
-        # 3. Calculate the State Correction (delta theta)
-        delta_theta = K @ error_vector
+        # 4. Calculate the 6D State Correction
+        correction = K @ error_vector
+        delta_theta = correction[0:3] # Attitude correction
+        delta_beta = correction[3:6]  # Bias correction (Learned from the cross-covariance)
         
-        # 4. Apply Multiplicative Update to Quaternion
-        delta_q = np.array([
-            delta_theta[0] / 2.0,
-            delta_theta[1] / 2.0,
-            delta_theta[2] / 2.0,
-            1.0
-        ])
-        delta_q /= np.linalg.norm(delta_q) # Normalize the update
+        # 5. Apply Updates
+        delta_q = np.array([delta_theta[0]/2, delta_theta[1]/2, delta_theta[2]/2, 1.0])
+        delta_q /= np.linalg.norm(delta_q)
+        self.q = (R.from_quat(self.q) * R.from_quat(delta_q)).as_quat()
         
-        r_current = R.from_quat(self.q)
-        r_update = R.from_quat(delta_q)
-        self.q = (r_current * r_update).as_quat()
+        self.beta += delta_beta # Update internal bias model
         
-        # 5. Update Covariance (Joseph form for numerical stability)
-        I_KH = np.eye(3) - (K @ H)
+        # 6. Update Covariance
+        I_KH = np.eye(6) - (K @ H)
         self.P = I_KH @ self.P @ I_KH.T + (K @ R_noise @ K.T)
 
         return self.q
