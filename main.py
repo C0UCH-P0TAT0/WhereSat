@@ -39,6 +39,8 @@ from wheresat.star_id import identify_stars
 from wheresat.quest import compute_attitude_quest
 from wheresat.mekf import MEKF
 from wheresat.controls import compute_command_torque
+from wheresat.sensor import apply_sensor_dirt
+from wheresat.gaussian import extract_centroids_gaussian
 
 def simulate_camera_optics(catalog, true_q, width=1024, fov_deg=45):
     focal_length = (width / 2) / np.tan(np.radians(fov_deg / 2))
@@ -115,14 +117,21 @@ class SILEngine:
             
             if len(render_data) >= 3:
                 self.last_image = render_star_field(render_data, width=self.width, sigma=1.5)
+                self.last_image = apply_sensor_dirt(self.last_image, readout_sigma=50.0, hot_pixel_fraction=0.0001)
                 raw_centroids = extract_centroids(self.last_image, threshold=300)
                 
                 if len(raw_centroids) > 6:
-                    intensities = [self.last_image[int(c[1]), int(c[0])] for c in raw_centroids]
-                    sorted_indices = np.argsort(intensities)[::-1]
+                    intensities = np.array([self.last_image[int(c[1]), int(c[0])] for c in raw_centroids])
+                    sorted_indices = np.argsort(np.where(intensities >= 60000, 0, intensities))[::-1]
                     extracted_centroids = raw_centroids[sorted_indices][:6]
                 else:
                     extracted_centroids = raw_centroids
+
+                # Refine CoM centroids to sub-pixel accuracy via 2D Gaussian fit
+                if len(extracted_centroids) > 0:
+                    refined = extract_centroids_gaussian(self.last_image, extracted_centroids)
+                    if len(refined) > 0:
+                        extracted_centroids = refined
                     
                 self.last_extracted_count = len(extracted_centroids)
 
@@ -194,5 +203,6 @@ class SILEngine:
             "true_q": self.true_q,
             "image": self.last_image,
             "extracted_centroids": self.last_extracted_centroids,  # [x, y, hip_id], up to 6
-            "extracted_names": self.last_extracted_names            # common name per centroid
+            "extracted_names": self.last_extracted_names,            # common name per centroid
+            "gyro_bias_est": self.mekf.beta.copy()
         }

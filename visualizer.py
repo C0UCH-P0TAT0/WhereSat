@@ -140,6 +140,7 @@ class MissionControl(QMainWindow):
             f"SPIN RATE    : {telemetry['spin_rate']:05.2f} deg/s\n\n"
             f"OPTICAL SENSOR\n"
             f"STARS EXTRACTED : {telemetry['stars_extracted']:02d}\n"
+            f"BIAS EST : {telemetry['gyro_bias_est']}\n"
         )
         self.telemetry_label.setText(hud)
         

@@ -20,7 +20,7 @@ class MEKF:
         
         # Process Noise 
         self.sigma_v = 1e-4  # Gyroscope white noise
-        self.sigma_u = 1e-6  # Bias random walk (how fast thermal drift changes)
+        self.sigma_u = 3e-6  # Bias random walk (how fast thermal drift changes)
         
     def predict(self, omega_meas: np.ndarray, dt: float):
         """ Propagates the state forward using bias-corrected Gyroscope rates. """
