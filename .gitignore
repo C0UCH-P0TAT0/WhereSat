@@ -1,5 +1,44 @@
 .venv/
-__pycache__/
 *.DS_Store
 *.egg-info/
 data/
+
+# ==========================================
+# Python & Simulation Trash
+# ==========================================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# ==========================================
+# Vivado / FPGA Build Artifacts
+# ==========================================
+*.log
+*.jou
+*.str
+.Xil/
+fpga/build/
+Work/
+xsim.dir/
+*.pb
+*.wdb
+*.vcd
+
+# ==========================================
+# ARM GCC / MCU Build Artifacts
+# ==========================================
+mcu/build/
+*.o
+*.d
+*.elf
+*.bin
+*.hex
+*.map
+*.lst
+
+# ==========================================
+# Large Simulation Hex Dumps
+# ==========================================
+*.mem
