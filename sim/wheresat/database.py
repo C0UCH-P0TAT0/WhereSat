@@ -79,6 +79,63 @@ def build_star_database(catalog_path: str, max_fov_deg: float = 20.0):
     print(f"[SYSTEM] Database locked in {time.time() - start_time:.2f} seconds.")
     return database_tree, triangle_ids
 
+import numpy as np
+import time
+
+def export_database_to_c(angles: np.ndarray, triangle_ids: np.ndarray, output_filename: str = "catalog.h"):
+    """
+    Demolishes the dynamic tree and compiles a flat, sorted, bare-metal C array.
+    """
+    print("--- 💥 INITIATING K-D TREE DEMOLITION ---")
+    start_time = time.time()
+    
+    # 1. The Binary Search Preparation
+    # We MUST sort the entire database numerically by the "Shortest Angle" (Column 0).
+    print("   -> Sorting database for Binary Search...")
+    sort_indices = np.argsort(angles[:, 0])
+    sorted_angles = angles[sort_indices]
+    sorted_ids = triangle_ids[sort_indices]
+
+    num_triangles = len(sorted_angles)
+    print(f"   -> Flattening {num_triangles:,} fingerprints into C syntax...")
+
+    # 2. Write the bare-metal C Header
+    with open(output_filename, "w") as f:
+        f.write("#ifndef CATALOG_H\n")
+        f.write("#define CATALOG_H\n\n")
+        f.write("#include <stdint.h>\n")
+        
+        # PROGMEM Macro: Prevents the array from loading into MCU SRAM
+        f.write("#if defined(__AVR__)\n")
+        f.write("  #include <avr/pgmspace.h>\n")
+        f.write("#else\n")
+        f.write("  #define PROGMEM\n")
+        f.write("#endif\n\n")
+        
+        f.write(f"const uint32_t NUM_TRIANGLES = {num_triangles};\n\n")
+        
+        # Write the Angles Array (The Fingerprints)
+        f.write("// Fingerprints: [Shortest, Medium, Longest] in Radians\n")
+        f.write("const float triangle_db[][3] PROGMEM = {\n")
+        for i, row in enumerate(sorted_angles):
+            end_char = ",\n" if i < num_triangles - 1 else "\n"
+            f.write(f"    {{{row[0]:.6f}, {row[1]:.6f}, {row[2]:.6f}}}{end_char}")
+        f.write("};\n\n")
+        
+        # Write the Catalog IDs (The Output)
+        f.write("// Hipparcos Catalog IDs [Opposite Shortest, Opposite Medium, Opposite Longest]\n")
+        f.write("const uint32_t triangle_ids[][3] PROGMEM = {\n")
+        for i, row in enumerate(sorted_ids):
+            end_char = ",\n" if i < num_triangles - 1 else "\n"
+            f.write(f"    {{{row[0]}, {row[1]}, {row[2]}}}{end_char}")
+        f.write("};\n\n")
+        
+        f.write("#endif // CATALOG_H\n")
+        
+    print(f"[SUCCESS] Flat C database compiled to {output_filename} in {time.time() - start_time:.2f} seconds.")
+    print(f"[SYSTEM] MCU is cleared for dynamic-allocation-free operation.")
+
+
 if __name__ == "__main__":
     data_dir = Path(__file__).resolve().parents[2] / "data"
     catalog_file = str(data_dir / "optimized_catalog.npy")
