@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 # [NEW] TASK 1: THE VIVADO HARDWARE BRIDGE
 # We define this first so the noise injector can use it.
 # =========================================================
-def export_frame_to_mem(dirty_image_array: np.ndarray, filename: str = "tb_frame.mem"):
+def export_frame_to_mem(dirty_image_array: np.ndarray, filename: str = "data/tb_frame.mem"):
     """
     Converts a 2D uint16 image into a 1D hex memory map for Vivado's $readmemh.
     """

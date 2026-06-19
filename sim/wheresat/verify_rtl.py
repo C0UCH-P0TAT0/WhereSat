@@ -43,6 +43,11 @@ def validate_hardware_math(python_centroids_path: str, fpga_output_path: str, to
         sys.exit(1)
 
 if __name__ == "__main__":
-    # Example execution:
-    # validate_hardware_math("py_centroids.txt", "rtl_centroids.txt", tolerance=0.5)
-    pass
+    if len(sys.argv) != 3:
+        print("Usage: python verify_rtl.py <path_to_py_centroids> <path_to_rtl_centroids>")
+        sys.exit(1)
+        
+    py_path = sys.argv[1]
+    rtl_path = sys.argv[2]
+    
+    validate_hardware_math(py_path, rtl_path, tolerance=0.5)
