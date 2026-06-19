@@ -1,6 +1,25 @@
 import os
 import numpy as np
 import matplotlib.pyplot as plt
+# =========================================================
+# [NEW] TASK 1: THE VIVADO HARDWARE BRIDGE
+# We define this first so the noise injector can use it.
+# =========================================================
+def export_frame_to_mem(dirty_image_array: np.ndarray, filename: str = "tb_frame.mem"):
+    """
+    Converts a 2D uint16 image into a 1D hex memory map for Vivado's $readmemh.
+    """
+    print(f"[SYSTEM] Exporting raw memory map to {filename}...")
+    
+    # 1. Flatten the 1024x1024 grid into a 1D line of 1,048,576 pixels
+    flat_pixels = dirty_image_array.flatten()
+    
+    # 2. Write exactly 4-character Hex values (padded with zeros)
+    with open(filename, 'w') as f:
+        for pixel in flat_pixels:
+            f.write(f"{pixel:04X}\n")
+            
+    print(f"[SUCCESS] Wrote {len(flat_pixels)} register addresses to {filename}.")
 
 # ---------------------------------------------------------
 # 1. THE NOISE INJECTOR
@@ -27,8 +46,14 @@ def apply_sensor_dirt(clean_image: np.ndarray, readout_sigma: float, hot_pixel_f
         
     # 3. Clip to valid 16-bit bounds and cast to unsigned integer
     noisy_image = np.clip(noisy_image, 0.0, 65535.0)
+    final_uint16_image = noisy_image.astype(np.uint16)
     
-    return noisy_image.astype(np.uint16)
+    # -----------------------------------------------------
+    # [NEW] TASK 1 TRIGGER: Call the exporter right here!
+    # -----------------------------------------------------
+    export_frame_to_mem(final_uint16_image, filename="tb_frame.mem")
+    
+    return final_uint16_image
 
 # ---------------------------------------------------------
 # 2. THE VISUALIZER
