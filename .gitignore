@@ -42,3 +42,22 @@ mcu/build/
 # Large Simulation Hex Dumps
 # ==========================================
 *.mem
+
+# Build outputs
+Debug/
+Release/
+build/
+
+# IDE files
+.settings/
+.project
+.cproject
+
+# Binaries
+*.elf
+*.hex
+*.bin
+*.map
+
+# Misc
+*.launch
