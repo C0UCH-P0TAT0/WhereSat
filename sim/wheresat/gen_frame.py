@@ -2,6 +2,7 @@ import numpy as np
 import os
 import random
 import math
+# pyrefly: ignore [missing-import]
 from sensor import apply_sensor_dirt
 
 def generate_gauntlet_vector():
