@@ -24,7 +24,11 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include <stdio.h>
+#include "fpga_interface.h"
+#include "camera_geometry.h"
+#include "test_suite.h"
+#include "mock_fpga.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -56,7 +60,23 @@ void SystemClock_Config(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+/**
+ * @brief Redirects standard output (printf) to UART2.
+ *
+ * This function overrides the weak implementation in the syscalls file.
+ * It allows us to use printf() to send debug messages to the PC terminal.
+ *
+ * @param ch The character to send
+ * @return int The character sent
+ */
+int __io_putchar(int ch) {
+    // External handle for UART2 (defined in usart.c)
+    extern UART_HandleTypeDef huart2;
 
+    // Transmit 1 byte over UART2 with a 10ms timeout
+    HAL_UART_Transmit(&huart2, (uint8_t *)&ch, 1, 10);
+    return ch;
+}
 /* USER CODE END 0 */
 
 /**
@@ -91,13 +111,53 @@ int main(void)
   MX_SPI1_Init();
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
+  // Ensure SPI Chip Select (PA4) starts HIGH (Inactive)
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET);
 
+  // Day 1 Verification Message
+  printf("\r\n====================================\r\n");
+  printf(" WHERESAT STAR TRACKER - INITIALIZED\r\n");
+  printf(" System Clock: %lu MHz\r\n", HAL_RCC_GetHClockFreq() / 1000000);
+  printf(" UART2: 115200 Baud - OK\r\n");
+  printf(" SPI1: Master Mode - OK\r\n");
+  printf("====================================\r\n");
+  test_camera_geometry();
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  while (1)
-  {
+    FPGA_Packet_t current_packet;
+    Vector3_t star_vectors[MAX_CENTROIDS];
+
+    while (1)
+    {
+        // --- OPTION A: REAL HARDWARE ---
+        // HAL_StatusTypeDef status = fpga_receive_centroids(&current_packet);
+
+        // --- OPTION B: MOCK DATA (Use this for Day 1-5 testing) ---
+        load_test_centroids(&current_packet);
+        HAL_StatusTypeDef status = HAL_OK;
+
+        if (status == HAL_OK) {
+            if (fpga_validate_packet(&current_packet)) {
+                // This will now print to your terminal thanks to float support!
+                printf("Processed %d valid stars from Mock FPGA.\r\n", current_packet.count);
+
+                for (int i = 0; i < current_packet.count; i++) {
+                    star_vectors[i] = pixel_to_vector(current_packet.centroids[i]);
+
+                    if(i == 0) {
+                        printf("Star 0 Vector: [%.4f, %.4f, %.4f]\r\n",
+                               star_vectors[i].x, star_vectors[i].y, star_vectors[i].z);
+                    }
+                }
+            } else {
+                printf("Packet Validation Failed!\r\n");
+            }
+        }
+
+        HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5); // Blink LED
+        HAL_Delay(2000); // 2 second delay so the terminal isn't flooded
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
