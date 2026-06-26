@@ -1,7 +1,8 @@
 .venv/
 *.DS_Store
 *.egg-info/
-data/
+data/*
+!data/.gitkeep
 
 # ==========================================
 # Python & Simulation Trash
