@@ -27,7 +27,7 @@ typedef struct {
 /**
  * @brief Structure for the full SPI data packet from the FPGA.
  */
-typedef struct {
+typedef struct __attribute__((packed)) {
     uint8_t header;
     uint8_t count;
     Centroid_t centroids[MAX_CENTROIDS];

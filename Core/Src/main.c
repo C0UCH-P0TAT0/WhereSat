@@ -117,7 +117,7 @@ int main(void)
   // Day 1 Verification Message
   printf("\r\n====================================\r\n");
   printf(" WHERESAT STAR TRACKER - INITIALIZED\r\n");
-  printf(" System Clock: %lu MHz\r\n", HAL_RCC_GetHClockFreq() / 1000000);
+  printf(" System Clock: %lu MHz\r\n", (unsigned long)(HAL_RCC_GetHCLKFreq() / 1000000));
   printf(" UART2: 115200 Baud - OK\r\n");
   printf(" SPI1: Master Mode - OK\r\n");
   printf("====================================\r\n");
@@ -140,17 +140,17 @@ int main(void)
 
         if (status == HAL_OK) {
             if (fpga_validate_packet(&current_packet)) {
+
                 // This will now print to your terminal thanks to float support!
-                printf("Processed %d valid stars from Mock FPGA.\r\n", current_packet.count);
+            	printf("Processed %d valid stars from Mock FPGA:\r\n", current_packet.count);
 
-                for (int i = 0; i < current_packet.count; i++) {
-                    star_vectors[i] = pixel_to_vector(current_packet.centroids[i]);
+            	for (int i = 0; i < current_packet.count; i++) {
+            	    star_vectors[i] = pixel_to_vector(current_packet.centroids[i]);
 
-                    if(i == 0) {
-                        printf("Star 0 Vector: [%.4f, %.4f, %.4f]\r\n",
-                               star_vectors[i].x, star_vectors[i].y, star_vectors[i].z);
-                    }
-                }
+            	    // Print every star's vector
+            	    printf("  Star %d: [%.4f, %.4f, %.4f]\r\n",
+            	           i, star_vectors[i].x, star_vectors[i].y, star_vectors[i].z);
+            	}
             } else {
                 printf("Packet Validation Failed!\r\n");
             }

@@ -9,32 +9,36 @@
  */
 
 #include "fpga_interface.h"
+#include <string.h>
 
 /**
  * @brief Fills a packet with mock star data.
  * @param packet Pointer to the packet to populate.
  */
 void load_test_centroids(FPGA_Packet_t *packet) {
-    packet->header = FPGA_PACKET_HEADER;
-    packet->count = 3; // A simple triangle
+    // 1. Clear the entire struct to zero
+    memset(packet, 0, sizeof(FPGA_Packet_t));
 
-    // Star 1
+    // 2. Fill the data
+    packet->header = FPGA_PACKET_HEADER;
+    packet->count = 3;
+
     packet->centroids[0].x = 640.0f;
     packet->centroids[0].y = 480.0f;
 
-    // Star 2
     packet->centroids[1].x = 700.0f;
     packet->centroids[1].y = 480.0f;
 
-    // Star 3
     packet->centroids[2].x = 640.0f;
     packet->centroids[2].y = 550.0f;
 
-    // Calculate dummy checksum
-    uint8_t checksum = 0;
+    // 3. Calculate checksum
+    uint8_t calc_checksum = 0;
     uint8_t *ptr = (uint8_t*)packet;
-    for(int i=0; i < sizeof(FPGA_Packet_t)-1; i++) {
-        checksum ^= ptr[i];
+
+    // XOR everything except the last byte (the checksum field itself)
+    for(int i = 0; i < sizeof(FPGA_Packet_t) - 1; i++) {
+        calc_checksum ^= ptr[i];
     }
-    packet->checksum = checksum;
+    packet->checksum = calc_checksum;
 }

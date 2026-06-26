@@ -18,6 +18,7 @@ extern SPI_HandleTypeDef hspi1;
  * @param packet Pointer to the FPGA_Packet_t structure to fill.
  * @return HAL status of the SPI transaction.
  */
+
 HAL_StatusTypeDef fpga_receive_centroids(FPGA_Packet_t *packet) {
     HAL_StatusTypeDef status;
 
@@ -40,16 +41,24 @@ HAL_StatusTypeDef fpga_receive_centroids(FPGA_Packet_t *packet) {
  * @return 1 if valid, 0 if corrupt.
  */
 uint8_t fpga_validate_packet(FPGA_Packet_t *packet) {
-    if (packet->header != FPGA_PACKET_HEADER) return 0;
+    if (packet->header != FPGA_PACKET_HEADER) {
+        printf("Validation Error: Bad Header (0x%02X)\r\n", packet->header);
+        return 0;
+    }
 
-    // Simple XOR checksum validation
     uint8_t calc_checksum = 0;
     uint8_t *raw_data = (uint8_t *)packet;
     for (int i = 0; i < sizeof(FPGA_Packet_t) - 1; i++) {
         calc_checksum ^= raw_data[i];
     }
 
-    return (calc_checksum == packet->checksum);
+    if (calc_checksum != packet->checksum) {
+        printf("Validation Error: Checksum Mismatch (Expected 0x%02X, Got 0x%02X)\r\n",
+                packet->checksum, calc_checksum);
+        return 0;
+    }
+
+    return 1; // Success
 }
 
 /**
