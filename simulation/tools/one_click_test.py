@@ -111,7 +111,63 @@ def main():
     
     # Run Python QUEST
     calculated_q = compute_attitude_quest(matched_eci, measured_body)
+    # ==================================================
+    # DEBUG: Compare Python QUEST internals with STM32
+    # ==================================================
 
+    weights = np.ones(len(matched_eci)) / len(matched_eci)
+
+    B = np.zeros((3, 3))
+    for i in range(len(matched_eci)):
+        B += weights[i] * np.outer(matched_eci[i], measured_body[i])
+
+    S = B + B.T
+    sigma = np.trace(B)
+
+    Z = np.array([
+    B[1, 2] - B[2, 1],
+    B[2, 0] - B[0, 2],
+    B[0, 1] - B[1, 0]
+    ])
+
+    K = np.empty((4, 4))
+    K[:3, :3] = S - sigma * np.eye(3)
+    K[:3, 3] = Z
+    K[3, :3] = Z
+    K[3, 3] = sigma
+
+    print("\n================ PYTHON QUEST DEBUG ================\n")
+
+    print("Matched Reference / Body Vectors\n")
+
+    for i in range(len(matched_eci)):
+        print(f"STAR {i}")
+        print(f"HIP : {final_hips[i]}")
+        print("Ref :",
+            np.round(matched_eci[i], 6))
+        print("Body:",
+            np.round(measured_body[i], 6))
+        print()
+
+    print("B =")
+    print(np.round(B, 6))
+
+    print("\nS =")
+    print(np.round(S, 6))
+
+    print("\nSigma =")
+    print(round(sigma, 6))
+
+    print("\nZ =")
+    print(np.round(Z, 6))
+
+    print("\nK =")
+    print(np.round(K, 6))
+
+    print("\nQuaternion [x y z w] =")
+    print(np.round(calculated_q, 6))
+
+    print("\n====================================================\n")
     print("\n==================================================")
     print(" COPY AND PASTE THIS INTO mock_fpga.c:")
     print("==================================================\n")

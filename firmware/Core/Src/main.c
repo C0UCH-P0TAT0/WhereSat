@@ -1,13 +1,14 @@
-/* USER CODE BEGIN Header */
 /**
-  ******************************************************************************
-  * @file           : main.c
-  * @brief          : Main program body with QUEST Integration & Validation
-  ******************************************************************************
-  * @author Aditya (WhereSat Team)
-  */
-/* USER CODE END Header */
-
+ * @file main.c
+ * @brief Main program body with QUEST Integration and Convention Verification.
+ *
+ * This file implements the full Lost-in-Space pipeline:
+ * Mock Centroids -> Body Vectors -> Star ID -> QUEST -> Attitude.
+ * It includes a dual-direction check to verify if the quaternion represents
+ * Reference-to-Body or Body-to-Reference.
+ *
+ * @author Aditya (WhereSat Team)
+ */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "spi.h"
@@ -49,28 +50,30 @@ int __io_putchar(int ch) {
   */
 int main(void)
 {
-  /* HAL and System Clock Initialization */
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
   HAL_Init();
+
+  /* Configure the system clock to 180MHz */
   SystemClock_Config();
 
-  /* Initialize Peripherals */
+  /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_SPI1_Init();
   MX_USART2_UART_Init();
 
   /* USER CODE BEGIN 2 */
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET); // SPI CS High
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET);
 
   printf("\r\n====================================\r\n");
   printf(" WHERESAT STAR TRACKER - WEEK 7\r\n");
   printf(" System Clock: %lu MHz\r\n", (unsigned long)(HAL_RCC_GetHCLKFreq() / 1000000));
-  printf(" Convention: Scalar-First (w, x, y, z)\r\n");
+  printf(" Pipeline: StarID -> QUEST\r\n");
   printf("====================================\r\n");
 
-  // 1. Verify Camera Geometry Math
+  // Verify Aditya's geometry math
   test_camera_geometry();
 
-  // 2. Initialize Star Catalog
+  // Initialize the Star Catalog
   if (catalog_init() == false) {
       printf("CRITICAL ERROR: Database failed to load!\r\n");
   } else {
@@ -87,17 +90,18 @@ int main(void)
 
   QUEST_Input_t quest_data;
   Quaternion_t estimated_q;
+  int matched_source_indices[MAX_CENTROIDS]; // Map QUEST input back to original star index
 
   while (1)
   {
-      // 3. Load Mock Centroids (Day 5 logic)
+      // 1. Get Centroid Data (Mocked)
       load_test_centroids(&current_packet);
 
       if (fpga_validate_packet(&current_packet)) {
 
           printf("\r\n--- PROCESSING NEW FRAME (%d Stars) ---\r\n", current_packet.count);
 
-          // 4. Camera Geometry: Pixels -> Body Vectors
+          // 2. Camera Geometry: Pixels -> Body Vectors
           for (int i = 0; i < current_packet.count; i++) {
               Vector3_t vec = pixel_to_vector(current_packet.centroids[i]);
               live_stars[i].local_id = i;
@@ -106,19 +110,20 @@ int main(void)
               live_stars[i].z = vec.z;
           }
 
-          // 5. Star Identification: Build Triangles & Match
+          // 3. Star Identification: Build Triangles & Match
           uint16_t num_triangles = 0;
           build_triangles(live_stars, current_packet.count, triangles, &num_triangles);
           match_stars(triangles, num_triangles, current_packet.count, final_matches);
 
-          // 6. QUEST Integration: Pair Body Vectors with Catalog Reference Vectors
+          // 4. QUEST Integration: Prepare Observation/Reference Pairs
           quest_data.count = 0;
           for (int i = 0; i < current_packet.count; i++) {
               if (final_matches[i].is_matched) {
-                  // Body vector (Measured)
-                  quest_data.body_v[quest_data.count] = (Vector3_t){live_stars[i].x, live_stars[i].y, live_stars[i].z};
+                  // Store mapping for debug printing
+                  matched_source_indices[quest_data.count] = i;
 
-                  // Reference vector (Catalog)
+                  // Populate QUEST input arrays
+                  quest_data.body_v[quest_data.count] = (Vector3_t){live_stars[i].x, live_stars[i].y, live_stars[i].z};
                   catalog_get_star_vector(final_matches[i].hip_id, &quest_data.reference_v[quest_data.count]);
 
                   quest_data.weights[quest_data.count] = 1.0f;
@@ -126,44 +131,70 @@ int main(void)
               }
           }
 
-          // 7. Compute Attitude
+          // 5. Compute Attitude and Verify Convention
           if (quest_data.count >= 2) {
-              estimated_q = quest_compute(&quest_data);
 
-              // Force Scalar-Positive (Canonical Form to match Python)
-              if (estimated_q.q0 < 0) {
-                  estimated_q.q0 *= -1.0f;
-                  estimated_q.q1 *= -1.0f;
-                  estimated_q.q2 *= -1.0f;
-                  estimated_q.q3 *= -1.0f;
+              // Debug: Print Matched Vectors (Corrected Indexing)
+              printf("\nQUEST Input Vectors:\n");
+              for(int i=0; i < quest_data.count; i++) {
+                  int original_idx = matched_source_indices[i];
+                  printf("[%d] HIP ID: %lu\n", i, final_matches[original_idx].hip_id);
+                  printf("  Ref : [% .6f, % .6f, % .6f]\n",
+                         quest_data.reference_v[i].x, quest_data.reference_v[i].y, quest_data.reference_v[i].z);
+                  printf("  Body: [% .6f, % .6f, % .6f]\n",
+                         quest_data.body_v[i].x, quest_data.body_v[i].y, quest_data.body_v[i].z);
               }
+
+              estimated_q = quest_compute(&quest_data);
 
               printf("\r\n>>> ATTITUDE DETERMINED <<<\r\n");
               printf("Quaternion [w, x, y, z]:\r\n");
               printf("[ %.6f, %.6f, %.6f, %.6f ]\r\n",
-                      estimated_q.q0, estimated_q.q1, estimated_q.q2, estimated_q.q3);
+                     estimated_q.q0, estimated_q.q1, estimated_q.q2, estimated_q.q3);
 
-              // 8. Direction Validation Test
-              // Rotate the first reference vector by our estimate.
-              // It should match the first body vector.
-              Vector3_t check_vec = quat_rotate_vector(estimated_q, quest_data.reference_v[0]);
-              printf("Direction Check (Rotated Ref vs Measured Body):\r\n");
-              printf("  Expected: [%.3f, %.3f, %.3f]\r\n", quest_data.body_v[0].x, quest_data.body_v[0].y, quest_data.body_v[0].z);
-              printf("  Actual:   [%.3f, %.3f, %.3f]\r\n", check_vec.x, check_vec.y, check_vec.z);
+              /* ---------- Direction Check ---------- */
+              Vector3_t expected = quest_data.body_v[0];
+
+              // Test Original Quaternion (q)
+              Vector3_t actual = quat_rotate_vector(estimated_q, quest_data.reference_v[0]);
+
+              // Test Conjugate (q_conj)
+              Quaternion_t qc = quat_conjugate(estimated_q);
+              Vector3_t actual_inv = quat_rotate_vector(qc, quest_data.reference_v[0]);
+
+              printf("\r\nDirection Check (Rotated Ref vs Measured Body):\r\n");
+              printf("Expected:        [% .3f, % .3f, % .3f]\r\n", expected.x, expected.y, expected.z);
+              printf("Actual (q):      [% .3f, % .3f, % .3f]\r\n", actual.x, actual.y, actual.z);
+              printf("Actual (q_conj): [% .3f, % .3f, % .3f]\r\n", actual_inv.x, actual_inv.y, actual_inv.z);
+
+              // Calculate Errors (Optimized dx*dx)
+              float dx = expected.x - actual.x;
+              float dy = expected.y - actual.y;
+              float dz = expected.z - actual.z;
+              float err = sqrtf(dx*dx + dy*dy + dz*dz);
+
+              float dx_inv = expected.x - actual_inv.x;
+              float dy_inv = expected.y - actual_inv.y;
+              float dz_inv = expected.z - actual_inv.z;
+              float err_inv = sqrtf(dx_inv*dx_inv + dy_inv*dy_inv + dz_inv*dz_inv);
+
+              printf("Direction Error (q)      = %.6f\r\n", err);
+              printf("Direction Error (q_conj) = %.6f\r\n", err_inv);
 
           } else {
               printf("\r\n>>> ATTITUDE FAILED: Insufficient matches (%d/2) <<<\r\n", quest_data.count);
           }
       }
 
-      HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5); // Heartbeat LED
+      HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);
       HAL_Delay(5000);
     /* USER CODE END WHILE */
   }
 }
 
 /**
-  * @brief System Clock Configuration (180MHz)
+  * @brief System Clock Configuration
+  * @retval None
   */
 void SystemClock_Config(void)
 {
@@ -182,16 +213,27 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
   RCC_OscInitStruct.PLL.PLLQ = 2;
   RCC_OscInitStruct.PLL.PLLR = 2;
-  HAL_RCC_OscConfig(&RCC_OscInitStruct);
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  {
+    Error_Handler();
+  }
 
-  HAL_PWREx_EnableOverDrive();
+  if (HAL_PWREx_EnableOverDrive() != HAL_OK)
+  {
+    Error_Handler();
+  }
 
-  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK|RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
-  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV4;
+  RCC_ClkInitStruct.APB1CLKDivider = HAL_RCC_GetPCLK1Freq() > 45000000 ? RCC_HCLK_DIV4 : RCC_HCLK_DIV2;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV2;
-  HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_5);
+
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_5) != HAL_OK)
+  {
+    Error_Handler();
+  }
 }
 
 void Error_Handler(void)
