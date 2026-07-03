@@ -11,7 +11,7 @@
 // ---------------------------------------------------------
 // A star must receive at least this many votes to be considered a "True Match".
 // Since 1 star is usually part of many triangles, 3 is a safe minimum.
-#define MIN_VOTES_REQUIRED 3 
+#define MIN_VOTES_REQUIRED 3
 
 // Maximum number of unique HIP IDs we will track votes for per observed star
 #define MAX_TRACKED_HIPS 5 

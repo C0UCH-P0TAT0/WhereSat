@@ -1,7 +1,14 @@
 [build-system]
-    requires = ["setuptools"]
-    build-backend = "setuptools.build_meta"
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
 
 [project]
-    name = "wheresat"
-    version = "0.1.0"
+name = "wheresat"
+version = "0.1.0"
+
+[tool.setuptools]
+package-dir = {"" = "simulation"}
+
+[tool.setuptools.packages.find]
+where = ["simulation"]
+include = ["wheresat*"]

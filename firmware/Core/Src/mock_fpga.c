@@ -18,19 +18,24 @@
 void load_test_centroids(FPGA_Packet_t *packet) {
     // 1. Clear the entire struct to zero
     memset(packet, 0, sizeof(FPGA_Packet_t));
-
-    // 2. Fill the data
     packet->header = FPGA_PACKET_HEADER;
-    packet->count = 3;
+    packet->count = 5;
 
-    packet->centroids[0].x = 640.0f;
-    packet->centroids[0].y = 480.0f;
 
-    packet->centroids[1].x = 700.0f;
-    packet->centroids[1].y = 480.0f;
+    packet->centroids[0].x = 430.250f; 
+    packet->centroids[0].y = 272.508f;
 
-    packet->centroids[2].x = 640.0f;
-    packet->centroids[2].y = 550.0f;
+    packet->centroids[1].x = 293.709f;
+    packet->centroids[1].y = 525.921f;
+
+    packet->centroids[2].x = 1019.443f; 
+    packet->centroids[2].y = 224.526f;
+
+    packet->centroids[3].x = 611.826f;  
+    packet->centroids[3].y = 574.466f;
+
+    packet->centroids[4].x = 466.203f;  
+    packet->centroids[4].y = 738.495f;
 
     // 3. Calculate checksum
     uint8_t calc_checksum = 0;

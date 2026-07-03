@@ -29,6 +29,9 @@
 #include "camera_geometry.h"
 #include "test_suite.h"
 #include "mock_fpga.h"
+#include "catalog_loader.h"    // <-- ADDED
+#include "triangle_builder.h"  // <-- ADDED
+#include "star_matcher.h"      // <-- ADDED
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -122,42 +125,68 @@ int main(void)
   printf(" SPI1: Master Mode - OK\r\n");
   printf("====================================\r\n");
   test_camera_geometry();
+
+   // Initialize the Star Catalog
+  if (catalog_init() == false) {
+      printf("CRITICAL ERROR: Database failed to load!\r\n");
+  } else {
+      printf("Database Loaded: %lu Stars, %lu Triangles\r\n", 
+             catalog_get_num_stars(), catalog_get_num_triangles());
+  }
   /* USER CODE END 2 */
 
   /* Infinite loop */
+  /* Infinite loop */
   /* USER CODE BEGIN WHILE */
     FPGA_Packet_t current_packet;
-    Vector3_t star_vectors[MAX_CENTROIDS];
+    ObservedStar live_stars[MAX_CENTROIDS];
+    ObservedTriangle triangles[MAX_OBSERVED_TRIANGLES];
+    MatchedStar final_matches[MAX_CENTROIDS];
 
     while (1)
     {
-        // --- OPTION A: REAL HARDWARE ---
-        // HAL_StatusTypeDef status = fpga_receive_centroids(&current_packet);
-
-        // --- OPTION B: MOCK DATA (Use this for Day 1-5 testing) ---
+        // --- OPTION B: MOCK DATA (Using the 5 stars from your Python script) ---
         load_test_centroids(&current_packet);
         HAL_StatusTypeDef status = HAL_OK;
 
         if (status == HAL_OK) {
             if (fpga_validate_packet(&current_packet)) {
+                
+                printf("\r\n--- PROCESSING NEW FRAME (%d Stars) ---\r\n", current_packet.count);
 
-                // This will now print to your terminal thanks to float support!
-            	printf("Processed %d valid stars from Mock FPGA:\r\n", current_packet.count);
+                // 1. Convert pixels to 3D Unit Vectors
+                for (int i = 0; i < current_packet.count; i++) {
+                    Vector3_t vec = pixel_to_vector(current_packet.centroids[i]);
+                    live_stars[i].local_id = i;
+                    live_stars[i].x = vec.x;
+                    live_stars[i].y = vec.y;
+                    live_stars[i].z = vec.z;
+                }
 
-            	for (int i = 0; i < current_packet.count; i++) {
-            	    star_vectors[i] = pixel_to_vector(current_packet.centroids[i]);
+                // 2. Build Triangles (YOUR Week 6 Code!)
+                uint16_t num_triangles = 0;
+                build_triangles(live_stars, current_packet.count, triangles, &num_triangles);
+                printf("Built %d triangles.\r\n", num_triangles);
 
-            	    // Print every star's vector
-            	    printf("  Star %d: [%.4f, %.4f, %.4f]\r\n",
-            	           i, star_vectors[i].x, star_vectors[i].y, star_vectors[i].z);
-            	}
+                // 3. Search Database and Vote (YOUR Week 6 Code!)
+                match_stars(triangles, num_triangles, current_packet.count, final_matches);
+
+                // 4. Print the results!
+                for (int i = 0; i < current_packet.count; i++) {
+                    if (final_matches[i].is_matched) {
+                        printf("Star %d -> MATCHED HIP ID: %lu (Votes: %d)\r\n", 
+                               i, final_matches[i].hip_id, final_matches[i].vote_count);
+                    } else {
+                        printf("Star %d -> No match found.\r\n", i);
+                    }
+                }
             } else {
                 printf("Packet Validation Failed!\r\n");
             }
         }
 
         HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5); // Blink LED
-        HAL_Delay(2000); // 2 second delay so the terminal isn't flooded
+        HAL_Delay(5000); // 5 second delay so you can read the terminal easily
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */

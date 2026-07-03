@@ -22,10 +22,10 @@ typedef struct {
     float z;
 } Vector3_t;
 
-/* Camera Intrinsics (Example values for a standard sensor) */
-#define FOCAL_LENGTH_PX 1024.0f  // Focal length in pixels
-#define PRINCIPAL_POINT_X 640.0f // Center of sensor X
-#define PRINCIPAL_POINT_Y 480.0f // Center of sensor Y
+/* Camera Intrinsics (Matched to Python Golden Reference) */
+#define FOCAL_LENGTH_PX 2903.71f // 20-degree FOV
+#define PRINCIPAL_POINT_X 512.0f // Center of 1024x1024 sensor
+#define PRINCIPAL_POINT_Y 512.0f // Center of 1024x1024 sensor
 
 /* Function Prototypes */
 Vector3_t pixel_to_vector(Centroid_t centroid);
