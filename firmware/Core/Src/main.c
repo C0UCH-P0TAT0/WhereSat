@@ -1,21 +1,15 @@
-/* USER CODE BEGIN Header */
 /**
-  ******************************************************************************
-  * @file           : main.c
-  * @brief          : Main program body with QUEST Integration
-  ******************************************************************************
-  * @attention
-  *
-  * Copyright (c) 2026 STMicroelectronics.
-  * All rights reserved.
-  *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
-  *
-  ******************************************************************************
-  */
-/* USER CODE END Header */
+ * @file main.c
+ * @brief Main program body with QUEST Integration and Convention Verification.
+ *
+ * This file implements the full Lost-in-Space pipeline:
+ * Mock Centroids -> Body Vectors -> Star ID -> QUEST -> Attitude.
+ * It includes a dual-direction check to verify if the quaternion represents
+ * Reference-to-Body or Body-to-Reference.
+ *
+ * @author Aditya (WhereSat Team)
+ */
+
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "spi.h"
@@ -26,6 +20,7 @@
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
 #include <stdbool.h>
+#include <math.h>
 #include "fpga_interface.h"
 #include "camera_geometry.h"
 #include "test_suite.h"
@@ -33,38 +28,13 @@
 #include "catalog_loader.h"
 #include "triangle_builder.h"
 #include "star_matcher.h"
-#include "quaternion.h"      // Aditya Week 7
-#include "quest.h"           // Aditya Week 7
+#include "quaternion.h"
+#include "quest.h"
 /* USER CODE END Includes */
-
-/* Private typedef -----------------------------------------------------------*/
-/* USER CODE BEGIN PTD */
-
-/* USER CODE END PTD */
-
-/* Private define ------------------------------------------------------------*/
-/* USER CODE BEGIN PD */
-
-/* USER CODE END PD */
-
-/* Private macro -------------------------------------------------------------*/
-/* USER CODE BEGIN PM */
-
-/* USER CODE END PM */
-
-/* Private variables ---------------------------------------------------------*/
-
-/* USER CODE BEGIN PV */
-
-/* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
-/* USER CODE BEGIN PFP */
 
-/* USER CODE END PFP */
-
-/* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 /**
  * @brief Redirects standard output (printf) to UART2.
@@ -78,29 +48,14 @@ int __io_putchar(int ch) {
 
 /**
   * @brief  The application entry point.
-  * @retval int
   */
 int main(void)
 {
-  /* USER CODE BEGIN 1 */
-
-  /* USER CODE END 1 */
-
-  /* MCU Configuration--------------------------------------------------------*/
-
   /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
   HAL_Init();
 
-  /* USER CODE BEGIN Init */
-
-  /* USER CODE END Init */
-
-  /* Configure the system clock */
+  /* Configure the system clock to 180MHz */
   SystemClock_Config();
-
-  /* USER CODE BEGIN SysInit */
-
-  /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
@@ -108,20 +63,18 @@ int main(void)
   MX_USART2_UART_Init();
 
   /* USER CODE BEGIN 2 */
-  // Ensure SPI Chip Select (PA4) starts HIGH (Inactive)
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET);
 
-  // System Boot Message
   printf("\r\n====================================\r\n");
   printf(" WHERESAT STAR TRACKER - WEEK 7\r\n");
   printf(" System Clock: %lu MHz\r\n", (unsigned long)(HAL_RCC_GetHCLKFreq() / 1000000));
   printf(" Pipeline: StarID -> QUEST\r\n");
   printf("====================================\r\n");
 
-  // Run Aditya's Geometry Verification
+  // Verify Aditya's geometry math
   test_camera_geometry();
 
-  // Initialize the Star Catalog (Yash's Task)
+  // Initialize the Star Catalog
   if (catalog_init() == false) {
       printf("CRITICAL ERROR: Database failed to load!\r\n");
   } else {
@@ -130,19 +83,19 @@ int main(void)
   }
   /* USER CODE END 2 */
 
-  /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   FPGA_Packet_t current_packet;
   ObservedStar live_stars[MAX_CENTROIDS];
   ObservedTriangle triangles[MAX_OBSERVED_TRIANGLES];
   MatchedStar final_matches[MAX_CENTROIDS];
 
-  QUEST_Input_t quest_data;    // Aditya Week 7
-  Quaternion_t estimated_q;    // Aditya Week 7
+  QUEST_Input_t quest_data;
+  Quaternion_t estimated_q;
+  int matched_source_indices[MAX_CENTROIDS]; // Map QUEST input back to original star index
 
   while (1)
   {
-      // 1. Get Centroid Data (Mocked for Week 7 Integration)
+      // 1. Get Centroid Data (Mocked)
       load_test_centroids(&current_packet);
 
       if (fpga_validate_packet(&current_packet)) {
@@ -165,44 +118,79 @@ int main(void)
 
           // 4. QUEST Integration: Prepare Observation/Reference Pairs
           quest_data.count = 0;
-          printf("Star ID Results:\r\n");
-
           for (int i = 0; i < current_packet.count; i++) {
               if (final_matches[i].is_matched) {
-                  printf("  [%d] HIP %lu (Votes: %d)\r\n", i, final_matches[i].hip_id, final_matches[i].vote_count);
+                  // Store mapping for debug printing
+                  matched_source_indices[quest_data.count] = i;
 
-                  // Add to QUEST input
-                  // Body vector is what we measured
+                  // Populate QUEST input arrays
                   quest_data.body_v[quest_data.count] = (Vector3_t){live_stars[i].x, live_stars[i].y, live_stars[i].z};
-
-                  // Reference vector is retrieved from the catalog using the HIP ID
                   catalog_get_star_vector(final_matches[i].hip_id, &quest_data.reference_v[quest_data.count]);
 
-                  quest_data.weights[quest_data.count] = 1.0f; // Equal weighting for now
+                  quest_data.weights[quest_data.count] = 1.0f;
                   quest_data.count++;
               }
           }
 
-          // 5. Compute Attitude if we have enough stars (Minimum 2)
+          // 5. Compute Attitude and Verify Convention
           if (quest_data.count >= 2) {
+
+              // Debug: Print Matched Vectors (Corrected Indexing)
+              printf("\nQUEST Input Vectors:\n");
+              for(int i=0; i < quest_data.count; i++) {
+                  int original_idx = matched_source_indices[i];
+                  printf("[%d] HIP ID: %lu\n", i, final_matches[original_idx].hip_id);
+                  printf("  Ref : [% .6f, % .6f, % .6f]\n",
+                         quest_data.reference_v[i].x, quest_data.reference_v[i].y, quest_data.reference_v[i].z);
+                  printf("  Body: [% .6f, % .6f, % .6f]\n",
+                         quest_data.body_v[i].x, quest_data.body_v[i].y, quest_data.body_v[i].z);
+              }
+
               estimated_q = quest_compute(&quest_data);
 
               printf("\r\n>>> ATTITUDE DETERMINED <<<\r\n");
-              printf("Quaternion [q0, q1, q2, q3]:\r\n");
+              printf("Quaternion [w, x, y, z]:\r\n");
               printf("[ %.6f, %.6f, %.6f, %.6f ]\r\n",
-                      estimated_q.q0, estimated_q.q1, estimated_q.q2, estimated_q.q3);
+                     estimated_q.q0, estimated_q.q1, estimated_q.q2, estimated_q.q3);
+
+              /* ---------- Direction Check ---------- */
+              Vector3_t expected = quest_data.body_v[0];
+
+              // Test Original Quaternion (q)
+              Vector3_t actual = quat_rotate_vector(estimated_q, quest_data.reference_v[0]);
+
+              // Test Conjugate (q_conj)
+              Quaternion_t qc = quat_conjugate(estimated_q);
+              Vector3_t actual_inv = quat_rotate_vector(qc, quest_data.reference_v[0]);
+
+              printf("\r\nDirection Check (Rotated Ref vs Measured Body):\r\n");
+              printf("Expected:        [% .3f, % .3f, % .3f]\r\n", expected.x, expected.y, expected.z);
+              printf("Actual (q):      [% .3f, % .3f, % .3f]\r\n", actual.x, actual.y, actual.z);
+              printf("Actual (q_conj): [% .3f, % .3f, % .3f]\r\n", actual_inv.x, actual_inv.y, actual_inv.z);
+
+              // Calculate Errors (Optimized dx*dx)
+              float dx = expected.x - actual.x;
+              float dy = expected.y - actual.y;
+              float dz = expected.z - actual.z;
+              float err = sqrtf(dx*dx + dy*dy + dz*dz);
+
+              float dx_inv = expected.x - actual_inv.x;
+              float dy_inv = expected.y - actual_inv.y;
+              float dz_inv = expected.z - actual_inv.z;
+              float err_inv = sqrtf(dx_inv*dx_inv + dy_inv*dy_inv + dz_inv*dz_inv);
+
+              printf("Direction Error (q)      = %.6f\r\n", err);
+              printf("Direction Error (q_conj) = %.6f\r\n", err_inv);
+
           } else {
-              printf("\r\n>>> ATTITUDE FAILED: Insufficient matches for QUEST (%d/2) <<<\r\n", quest_data.count);
+              printf("\r\n>>> ATTITUDE FAILED: Insufficient matches (%d/2) <<<\r\n", quest_data.count);
           }
       }
 
-      HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5); // Heartbeat
-      HAL_Delay(5000); // 5 second update rate for debug
+      HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);
+      HAL_Delay(5000);
     /* USER CODE END WHILE */
-
-    /* USER CODE BEGIN 3 */
   }
-  /* USER CODE END 3 */
 }
 
 /**
@@ -240,7 +228,7 @@ void SystemClock_Config(void)
                               |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
-  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV4;
+  RCC_ClkInitStruct.APB1CLKDivider = HAL_RCC_GetPCLK1Freq() > 45000000 ? RCC_HCLK_DIV4 : RCC_HCLK_DIV2;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV2;
 
   if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_5) != HAL_OK)
@@ -249,25 +237,8 @@ void SystemClock_Config(void)
   }
 }
 
-/* USER CODE BEGIN 4 */
-/* USER CODE END 4 */
-
-/**
-  * @brief  This function is executed in case of error occurrence.
-  * @retval None
-  */
 void Error_Handler(void)
 {
-  /* USER CODE BEGIN Error_Handler_Debug */
   __disable_irq();
-  while (1)
-  {
-  }
-  /* USER CODE END Error_Handler_Debug */
+  while (1) {}
 }
-
-#ifdef USE_FULL_ASSERT
-void assert_failed(uint8_t *file, uint32_t line)
-{
-}
-#endif /* USE_FULL_ASSERT */
