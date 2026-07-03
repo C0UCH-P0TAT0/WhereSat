@@ -1,46 +1,54 @@
 /**
  * @file test_suite.c
- * @brief Validation tests for Aditya's infrastructure and math modules.
+ * @brief Comprehensive math validation for camera geometry.
  *
- * This file contains test cases to verify that pixel-to-vector conversions
- * meet the required precision (< 1e-6) and that SPI packet parsing is robust.
+ * Verifies pixel-to-vector projection across all quadrants and ensures
+ * all output vectors are unit-length (magnitude = 1.0).
  *
  * @author Aditya (WhereSat Team)
  */
 
+#include "test_suite.h"
 #include "camera_geometry.h"
 #include <stdio.h>
 #include <math.h>
 
-/**
- * @brief Verifies that a pixel at the principal point results in a forward-facing vector [0,0,1].
- */
 void test_camera_geometry(void) {
-    printf("\r\n--- Running Geometry Tests ---\r\n");
+    printf("\r\n--- Running Comprehensive Geometry Tests ---\r\n");
 
-    // Test Case 1: Center Pixel
+    // Test 1: Center Pixel (Boresight)
     Centroid_t center = {PRINCIPAL_POINT_X, PRINCIPAL_POINT_Y};
-    Vector3_t result = pixel_to_vector(center);
+    Vector3_t v1 = pixel_to_vector(center);
+    printf("Test 1 (Center): ");
+    if (fabsf(v1.x) < 1e-6 && fabsf(v1.y) < 1e-6 && fabsf(v1.z - 1.0f) < 1e-6) printf("PASSED\r\n");
+    else printf("FAILED! [%.4f, %.4f, %.4f]\r\n", v1.x, v1.y, v1.z);
 
-    printf("Test 1 (Center Pixel): ");
-    if (fabsf(result.x) < 1e-6 && fabsf(result.y) < 1e-6 && fabsf(result.z - 1.0f) < 1e-6) {
-        printf("PASSED\r\n");
-    } else {
-        printf("FAILED! Got [%.6f, %.6f, %.6f]\r\n", result.x, result.y, result.z);
-    }
+    // Test 2: 45-deg Right (Verify X, Y, and Z)
+    Centroid_t right = {PRINCIPAL_POINT_X + FOCAL_LENGTH_PX, PRINCIPAL_POINT_Y};
+    Vector3_t v2 = pixel_to_vector(right);
+    printf("Test 2 (45-deg Right): ");
+    if (fabsf(v2.x - 0.707107f) < 1e-5 && fabsf(v2.y) < 1e-6 && fabsf(v2.z - 0.707107f) < 1e-5) printf("PASSED\r\n");
+    else printf("FAILED! [%.4f, %.4f, %.4f]\r\n", v2.x, v2.y, v2.z);
 
-    // Test Case 2: Known Offset
-    // If focal length is 1024 and we move 1024 pixels right, angle should be 45 degrees
-    Centroid_t offset = {PRINCIPAL_POINT_X + FOCAL_LENGTH_PX, PRINCIPAL_POINT_Y};
-    result = pixel_to_vector(offset);
+    // Test 3: 45-deg Left (-45°)
+    Centroid_t left = {PRINCIPAL_POINT_X - FOCAL_LENGTH_PX, PRINCIPAL_POINT_Y};
+    Vector3_t v3 = pixel_to_vector(left);
+    printf("Test 3 (45-deg Left): ");
+    if (fabsf(v3.x + 0.707107f) < 1e-5 && fabsf(v3.y) < 1e-6 && fabsf(v3.z - 0.707107f) < 1e-5) printf("PASSED\r\n");
+    else printf("FAILED! [%.4f, %.4f, %.4f]\r\n", v3.x, v3.y, v3.z);
 
-    printf("Test 2 (45-deg Offset): ");
-    // Expected: [1/sqrt(2), 0, 1/sqrt(2)] -> [0.7071, 0, 0.7071]
-    if (fabsf(result.x - 0.707107f) < 1e-5) {
-        printf("PASSED\r\n");
-    } else {
-        printf("FAILED! Got X=%.6f\r\n", result.x);
-    }
+    // Test 4: 45-deg Up (-45° in Y-axis)
+    Centroid_t up = {PRINCIPAL_POINT_X, PRINCIPAL_POINT_Y - FOCAL_LENGTH_PX};
+    Vector3_t v4 = pixel_to_vector(up);
+    printf("Test 4 (45-deg Up): ");
+    if (fabsf(v4.x) < 1e-6 && fabsf(v4.y + 0.707107f) < 1e-5 && fabsf(v4.z - 0.707107f) < 1e-5) printf("PASSED\r\n");
+    else printf("FAILED! [%.4f, %.4f, %.4f]\r\n", v4.x, v4.y, v4.z);
 
-    printf("--- Geometry Tests Complete ---\r\n\r\n");
+    // Test 5: Normalization (Verify Magnitude == 1.0)
+    float mag = vector_norm(v4);
+    printf("Test 5 (Normalization): ");
+    if (fabsf(mag - 1.0f) < 1e-6) printf("PASSED\r\n");
+    else printf("FAILED! Magnitude: %.6f\r\n", mag);
+
+    printf("--- All Geometry Tests Complete ---\r\n\r\n");
 }

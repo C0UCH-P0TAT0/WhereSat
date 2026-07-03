@@ -2,7 +2,7 @@
 /**
   ******************************************************************************
   * @file           : main.c
-  * @brief          : Main program body
+  * @brief          : Main program body with QUEST Integration
   ******************************************************************************
   * @attention
   *
@@ -25,10 +25,16 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
+#include <stdbool.h>
 #include "fpga_interface.h"
 #include "camera_geometry.h"
 #include "test_suite.h"
 #include "mock_fpga.h"
+#include "catalog_loader.h"
+#include "triangle_builder.h"
+#include "star_matcher.h"
+#include "quaternion.h"      // Aditya Week 7
+#include "quest.h"           // Aditya Week 7
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -62,18 +68,9 @@ void SystemClock_Config(void);
 /* USER CODE BEGIN 0 */
 /**
  * @brief Redirects standard output (printf) to UART2.
- *
- * This function overrides the weak implementation in the syscalls file.
- * It allows us to use printf() to send debug messages to the PC terminal.
- *
- * @param ch The character to send
- * @return int The character sent
  */
 int __io_putchar(int ch) {
-    // External handle for UART2 (defined in usart.c)
     extern UART_HandleTypeDef huart2;
-
-    // Transmit 1 byte over UART2 with a 10ms timeout
     HAL_UART_Transmit(&huart2, (uint8_t *)&ch, 1, 10);
     return ch;
 }
@@ -85,7 +82,6 @@ int __io_putchar(int ch) {
   */
 int main(void)
 {
-
   /* USER CODE BEGIN 1 */
 
   /* USER CODE END 1 */
@@ -110,54 +106,98 @@ int main(void)
   MX_GPIO_Init();
   MX_SPI1_Init();
   MX_USART2_UART_Init();
+
   /* USER CODE BEGIN 2 */
   // Ensure SPI Chip Select (PA4) starts HIGH (Inactive)
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET);
 
-  // Day 1 Verification Message
+  // System Boot Message
   printf("\r\n====================================\r\n");
-  printf(" WHERESAT STAR TRACKER - INITIALIZED\r\n");
+  printf(" WHERESAT STAR TRACKER - WEEK 7\r\n");
   printf(" System Clock: %lu MHz\r\n", (unsigned long)(HAL_RCC_GetHCLKFreq() / 1000000));
-  printf(" UART2: 115200 Baud - OK\r\n");
-  printf(" SPI1: Master Mode - OK\r\n");
+  printf(" Pipeline: StarID -> QUEST\r\n");
   printf("====================================\r\n");
+
+  // Run Aditya's Geometry Verification
   test_camera_geometry();
+
+  // Initialize the Star Catalog (Yash's Task)
+  if (catalog_init() == false) {
+      printf("CRITICAL ERROR: Database failed to load!\r\n");
+  } else {
+      printf("Database Loaded: %lu Stars, %lu Triangles\r\n",
+             catalog_get_num_stars(), catalog_get_num_triangles());
+  }
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-    FPGA_Packet_t current_packet;
-    Vector3_t star_vectors[MAX_CENTROIDS];
+  FPGA_Packet_t current_packet;
+  ObservedStar live_stars[MAX_CENTROIDS];
+  ObservedTriangle triangles[MAX_OBSERVED_TRIANGLES];
+  MatchedStar final_matches[MAX_CENTROIDS];
 
-    while (1)
-    {
-        // --- OPTION A: REAL HARDWARE ---
-        // HAL_StatusTypeDef status = fpga_receive_centroids(&current_packet);
+  QUEST_Input_t quest_data;    // Aditya Week 7
+  Quaternion_t estimated_q;    // Aditya Week 7
 
-        // --- OPTION B: MOCK DATA (Use this for Day 1-5 testing) ---
-        load_test_centroids(&current_packet);
-        HAL_StatusTypeDef status = HAL_OK;
+  while (1)
+  {
+      // 1. Get Centroid Data (Mocked for Week 7 Integration)
+      load_test_centroids(&current_packet);
 
-        if (status == HAL_OK) {
-            if (fpga_validate_packet(&current_packet)) {
+      if (fpga_validate_packet(&current_packet)) {
 
-                // This will now print to your terminal thanks to float support!
-            	printf("Processed %d valid stars from Mock FPGA:\r\n", current_packet.count);
+          printf("\r\n--- PROCESSING NEW FRAME (%d Stars) ---\r\n", current_packet.count);
 
-            	for (int i = 0; i < current_packet.count; i++) {
-            	    star_vectors[i] = pixel_to_vector(current_packet.centroids[i]);
+          // 2. Camera Geometry: Pixels -> Body Vectors
+          for (int i = 0; i < current_packet.count; i++) {
+              Vector3_t vec = pixel_to_vector(current_packet.centroids[i]);
+              live_stars[i].local_id = i;
+              live_stars[i].x = vec.x;
+              live_stars[i].y = vec.y;
+              live_stars[i].z = vec.z;
+          }
 
-            	    // Print every star's vector
-            	    printf("  Star %d: [%.4f, %.4f, %.4f]\r\n",
-            	           i, star_vectors[i].x, star_vectors[i].y, star_vectors[i].z);
-            	}
-            } else {
-                printf("Packet Validation Failed!\r\n");
-            }
-        }
+          // 3. Star Identification: Build Triangles & Match
+          uint16_t num_triangles = 0;
+          build_triangles(live_stars, current_packet.count, triangles, &num_triangles);
+          match_stars(triangles, num_triangles, current_packet.count, final_matches);
 
-        HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5); // Blink LED
-        HAL_Delay(2000); // 2 second delay so the terminal isn't flooded
+          // 4. QUEST Integration: Prepare Observation/Reference Pairs
+          quest_data.count = 0;
+          printf("Star ID Results:\r\n");
+
+          for (int i = 0; i < current_packet.count; i++) {
+              if (final_matches[i].is_matched) {
+                  printf("  [%d] HIP %lu (Votes: %d)\r\n", i, final_matches[i].hip_id, final_matches[i].vote_count);
+
+                  // Add to QUEST input
+                  // Body vector is what we measured
+                  quest_data.body_v[quest_data.count] = (Vector3_t){live_stars[i].x, live_stars[i].y, live_stars[i].z};
+
+                  // Reference vector is retrieved from the catalog using the HIP ID
+                  catalog_get_star_vector(final_matches[i].hip_id, &quest_data.reference_v[quest_data.count]);
+
+                  quest_data.weights[quest_data.count] = 1.0f; // Equal weighting for now
+                  quest_data.count++;
+              }
+          }
+
+          // 5. Compute Attitude if we have enough stars (Minimum 2)
+          if (quest_data.count >= 2) {
+              estimated_q = quest_compute(&quest_data);
+
+              printf("\r\n>>> ATTITUDE DETERMINED <<<\r\n");
+              printf("Quaternion [q0, q1, q2, q3]:\r\n");
+              printf("[ %.6f, %.6f, %.6f, %.6f ]\r\n",
+                      estimated_q.q0, estimated_q.q1, estimated_q.q2, estimated_q.q3);
+          } else {
+              printf("\r\n>>> ATTITUDE FAILED: Insufficient matches for QUEST (%d/2) <<<\r\n", quest_data.count);
+          }
+      }
+
+      HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5); // Heartbeat
+      HAL_Delay(5000); // 5 second update rate for debug
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -174,14 +214,9 @@ void SystemClock_Config(void)
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
-  /** Configure the main internal regulator output voltage
-  */
   __HAL_RCC_PWR_CLK_ENABLE();
   __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
 
-  /** Initializes the RCC Oscillators according to the specified parameters
-  * in the RCC_OscInitTypeDef structure.
-  */
   RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
   RCC_OscInitStruct.HSEState = RCC_HSE_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
@@ -196,15 +231,11 @@ void SystemClock_Config(void)
     Error_Handler();
   }
 
-  /** Activate the Over-Drive mode
-  */
   if (HAL_PWREx_EnableOverDrive() != HAL_OK)
   {
     Error_Handler();
   }
 
-  /** Initializes the CPU, AHB and APB buses clocks
-  */
   RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
                               |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
@@ -219,7 +250,6 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
-
 /* USER CODE END 4 */
 
 /**
@@ -229,26 +259,15 @@ void SystemClock_Config(void)
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
-  /* User can add his own implementation to report the HAL error return state */
   __disable_irq();
   while (1)
   {
   }
   /* USER CODE END Error_Handler_Debug */
 }
+
 #ifdef USE_FULL_ASSERT
-/**
-  * @brief  Reports the name of the source file and the source line number
-  *         where the assert_param error has occurred.
-  * @param  file: pointer to the source file name
-  * @param  line: assert_param error line source number
-  * @retval None
-  */
 void assert_failed(uint8_t *file, uint32_t line)
 {
-  /* USER CODE BEGIN 6 */
-  /* User can add his own implementation to report the file name and line number,
-     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
-  /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */

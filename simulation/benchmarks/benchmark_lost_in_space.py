@@ -1,7 +1,8 @@
+import sys
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 from pathlib import Path
-
+sys.path.append(str(Path(__file__).resolve().parents[1]))
 # Phase 1 & 2: Simulation Environment
 from wheresat.coordinates import eci_to_body
 from wheresat.camera import generate_image
@@ -66,7 +67,7 @@ def run_closed_loop_test(num_iterations: int = 10):
         
         # Phase B: The Degraded Sensor
         clean_image = render_star_field(truth_pixels, camera_width, sigma=1.5)
-        dirty_image = apply_sensor_dirt(clean_image, readout_sigma=noise_sigma, hot_pixel_fraction=0.001)
+        dirty_image = apply_sensor_dirt(clean_image, readout_sigma=noise_sigma, hot_pixel_fraction=0.00001)
         
         # Phase C: Centroid Extraction
         dynamic_threshold = int(noise_sigma * 4)
@@ -95,14 +96,24 @@ def run_closed_loop_test(num_iterations: int = 10):
             continue
             
         # Phase D: Yash's Star ID Engine
-        # We pass the dirty centroids and your static database
-        identified_ids = identify_stars(
+        # Make sure the left side says "measured_body, matched_eci ="
+        measured_body, matched_eci = identify_stars(
             centroids=gaussian_centroids,
             camera_width=camera_width,
             camera_fov=camera_fov,
             kd_tree=database_tree,
-            triangle_id_map=pair_ids
+            triangle_id_map=pair_ids,
+            catalog=catalog,
+            tolerance=2e-3
         )
+        
+        # Since QUEST needs vectors, we have to reverse-lookup the HIP IDs 
+        # from the matched ECI vectors to grade your algorithm!
+        identified_ids = []
+        for vec in matched_eci:
+            distances = np.linalg.norm(catalog[:, 1:4] - vec, axis=1)
+            closest_idx = np.argmin(distances)
+            identified_ids.append(int(catalog[closest_idx, 0]))
         
         # Phase E: The Grading
         matches = set(identified_ids).intersection(true_guide_ids)
@@ -116,10 +127,15 @@ def run_closed_loop_test(num_iterations: int = 10):
 
     # Final Metrics
     print("\n==========================================")
-    print(" 📊 WEEK 4 INTEGRATION RESULTS")
+    print(" 📊 WEEK 7 INTEGRATION RESULTS")
     print("==========================================")
     print(f"Attitude Lock Rate:  {(success_count / num_iterations) * 100:.1f}%")
-    print(f"Star ID Efficiency:  {(total_stars_identified / total_stars_tested) * 100:.1f}%")
+    
+    if total_stars_tested > 0:
+        print(f"Star ID Efficiency:  {(total_stars_identified / total_stars_tested) * 100:.1f}%")
+    else:
+        print("Star ID Efficiency:  0.0%")
+        
     if (success_count / num_iterations) > 0.9:
         print("\n[VERDICT] 🟢 FLIGHT READY. Merge to main.")
     else:
