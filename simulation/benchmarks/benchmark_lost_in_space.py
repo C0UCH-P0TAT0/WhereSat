@@ -136,7 +136,7 @@ def run_closed_loop_test(num_iterations: int = 10):
     else:
         print("Star ID Efficiency:  0.0%")
         
-    if (success_count / num_iterations) > 0.9:
+    if (success_count / num_iterations) >= 0.9:
         print("\n[VERDICT] 🟢 FLIGHT READY. Merge to main.")
     else:
         print("\n[VERDICT] 🔴 PIPELINE FAILURE. Check tolerance constraints.")

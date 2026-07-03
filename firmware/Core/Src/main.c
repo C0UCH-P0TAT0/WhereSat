@@ -30,11 +30,9 @@
 #include "camera_geometry.h"
 #include "test_suite.h"
 #include "mock_fpga.h"
-#include "catalog_loader.h"
-#include "triangle_builder.h"
-#include "star_matcher.h"
-#include "quaternion.h"      // Aditya Week 7
-#include "quest.h"           // Aditya Week 7
+#include "catalog_loader.h"    // <-- ADDED
+#include "triangle_builder.h"  // <-- ADDED
+#include "star_matcher.h"      // <-- ADDED
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -121,83 +119,67 @@ int main(void)
   // Run Aditya's Geometry Verification
   test_camera_geometry();
 
-  // Initialize the Star Catalog (Yash's Task)
+   // Initialize the Star Catalog
   if (catalog_init() == false) {
       printf("CRITICAL ERROR: Database failed to load!\r\n");
   } else {
-      printf("Database Loaded: %lu Stars, %lu Triangles\r\n",
+      printf("Database Loaded: %lu Stars, %lu Triangles\r\n", 
              catalog_get_num_stars(), catalog_get_num_triangles());
   }
   /* USER CODE END 2 */
 
   /* Infinite loop */
+  /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  FPGA_Packet_t current_packet;
-  ObservedStar live_stars[MAX_CENTROIDS];
-  ObservedTriangle triangles[MAX_OBSERVED_TRIANGLES];
-  MatchedStar final_matches[MAX_CENTROIDS];
+    FPGA_Packet_t current_packet;
+    ObservedStar live_stars[MAX_CENTROIDS];
+    ObservedTriangle triangles[MAX_OBSERVED_TRIANGLES];
+    MatchedStar final_matches[MAX_CENTROIDS];
 
-  QUEST_Input_t quest_data;    // Aditya Week 7
-  Quaternion_t estimated_q;    // Aditya Week 7
+    while (1)
+    {
+        // --- OPTION B: MOCK DATA (Using the 5 stars from your Python script) ---
+        load_test_centroids(&current_packet);
+        HAL_StatusTypeDef status = HAL_OK;
 
-  while (1)
-  {
-      // 1. Get Centroid Data (Mocked for Week 7 Integration)
-      load_test_centroids(&current_packet);
+        if (status == HAL_OK) {
+            if (fpga_validate_packet(&current_packet)) {
+                
+                printf("\r\n--- PROCESSING NEW FRAME (%d Stars) ---\r\n", current_packet.count);
 
-      if (fpga_validate_packet(&current_packet)) {
+                // 1. Convert pixels to 3D Unit Vectors
+                for (int i = 0; i < current_packet.count; i++) {
+                    Vector3_t vec = pixel_to_vector(current_packet.centroids[i]);
+                    live_stars[i].local_id = i;
+                    live_stars[i].x = vec.x;
+                    live_stars[i].y = vec.y;
+                    live_stars[i].z = vec.z;
+                }
 
-          printf("\r\n--- PROCESSING NEW FRAME (%d Stars) ---\r\n", current_packet.count);
+                // 2. Build Triangles (YOUR Week 6 Code!)
+                uint16_t num_triangles = 0;
+                build_triangles(live_stars, current_packet.count, triangles, &num_triangles);
+                printf("Built %d triangles.\r\n", num_triangles);
 
-          // 2. Camera Geometry: Pixels -> Body Vectors
-          for (int i = 0; i < current_packet.count; i++) {
-              Vector3_t vec = pixel_to_vector(current_packet.centroids[i]);
-              live_stars[i].local_id = i;
-              live_stars[i].x = vec.x;
-              live_stars[i].y = vec.y;
-              live_stars[i].z = vec.z;
-          }
+                // 3. Search Database and Vote (YOUR Week 6 Code!)
+                match_stars(triangles, num_triangles, current_packet.count, final_matches);
 
-          // 3. Star Identification: Build Triangles & Match
-          uint16_t num_triangles = 0;
-          build_triangles(live_stars, current_packet.count, triangles, &num_triangles);
-          match_stars(triangles, num_triangles, current_packet.count, final_matches);
+                // 4. Print the results!
+                for (int i = 0; i < current_packet.count; i++) {
+                    if (final_matches[i].is_matched) {
+                        printf("Star %d -> MATCHED HIP ID: %lu (Votes: %d)\r\n", 
+                               i, final_matches[i].hip_id, final_matches[i].vote_count);
+                    } else {
+                        printf("Star %d -> No match found.\r\n", i);
+                    }
+                }
+            } else {
+                printf("Packet Validation Failed!\r\n");
+            }
+        }
 
-          // 4. QUEST Integration: Prepare Observation/Reference Pairs
-          quest_data.count = 0;
-          printf("Star ID Results:\r\n");
-
-          for (int i = 0; i < current_packet.count; i++) {
-              if (final_matches[i].is_matched) {
-                  printf("  [%d] HIP %lu (Votes: %d)\r\n", i, final_matches[i].hip_id, final_matches[i].vote_count);
-
-                  // Add to QUEST input
-                  // Body vector is what we measured
-                  quest_data.body_v[quest_data.count] = (Vector3_t){live_stars[i].x, live_stars[i].y, live_stars[i].z};
-
-                  // Reference vector is retrieved from the catalog using the HIP ID
-                  catalog_get_star_vector(final_matches[i].hip_id, &quest_data.reference_v[quest_data.count]);
-
-                  quest_data.weights[quest_data.count] = 1.0f; // Equal weighting for now
-                  quest_data.count++;
-              }
-          }
-
-          // 5. Compute Attitude if we have enough stars (Minimum 2)
-          if (quest_data.count >= 2) {
-              estimated_q = quest_compute(&quest_data);
-
-              printf("\r\n>>> ATTITUDE DETERMINED <<<\r\n");
-              printf("Quaternion [q0, q1, q2, q3]:\r\n");
-              printf("[ %.6f, %.6f, %.6f, %.6f ]\r\n",
-                      estimated_q.q0, estimated_q.q1, estimated_q.q2, estimated_q.q3);
-          } else {
-              printf("\r\n>>> ATTITUDE FAILED: Insufficient matches for QUEST (%d/2) <<<\r\n", quest_data.count);
-          }
-      }
-
-      HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5); // Heartbeat
-      HAL_Delay(5000); // 5 second update rate for debug
+        HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5); // Blink LED
+        HAL_Delay(5000); // 5 second delay so you can read the terminal easily
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
