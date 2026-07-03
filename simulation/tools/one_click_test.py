@@ -8,6 +8,9 @@ ROOT_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, "..", ".."))
 DATA_DIR = os.path.join(ROOT_DIR, "data")
 INC_DIR = os.path.join(ROOT_DIR, "firmware", "Core", "Inc")
 
+sys.path.append(os.path.join(ROOT_DIR, "simulation"))
+from wheresat.quest import compute_attitude_quest # <-- ADDED QUEST IMPORT
+
 def angle_between(v1, v2):
     dot = max(-1.0, min(1.0, np.dot(v1, v2)))
     return math.acos(dot)
@@ -16,7 +19,6 @@ def main():
     print("1. Shrinking database to fit in STM32 Flash (512KB limit)...")
     catalog = np.load(os.path.join(DATA_DIR, "optimized_catalog.npy"))
     
-    # Filter to Mag <= 2.5 (Only ~90 stars, easily fits in STM32)
     if catalog.dtype.names is not None:
         mags = catalog['mag'] if 'mag' in catalog.dtype.names else catalog['Vmag']
         hips = catalog['id'] if 'id' in catalog.dtype.names else catalog['HIP']
@@ -30,7 +32,6 @@ def main():
     mini_hips = hips[mask]
     mini_vecs = vecs[mask]
     
-    # Build triangles
     triangles = []
     max_fov = math.radians(20.0)
     tree = cKDTree(mini_vecs)
@@ -75,7 +76,7 @@ def main():
     print("3. Scanning sky for a cluster of AT LEAST 5 STARS...")
     width = 1024
     focal_length = (width / 2) / math.tan(math.radians(20.0 / 2))
-    np.random.seed(42)
+##    np.random.seed(42)
     
     while True:
         true_q = R.random().as_quat()
@@ -91,11 +92,25 @@ def main():
         in_frame = (pixels_x >= 0) & (pixels_x < width) & (pixels_y >= 0) & (pixels_y < width)
         
         if np.sum(in_frame) >= 5:
-            break # We found 5 stars!
+            break 
             
     final_x = pixels_x[in_frame][:5]
     final_y = pixels_y[in_frame][:5]
     final_hips = visible_hips[in_frame][:5]
+    
+    # --- NEW: CALCULATE QUEST QUATERNION ---
+    # Convert pixels to body vectors
+    vx = final_x - (width/2)
+    vy = final_y - (width/2)
+    vz = np.full_like(vx, focal_length)
+    mags = np.sqrt(vx**2 + vy**2 + vz**2)
+    measured_body = np.column_stack((vx/mags, vy/mags, vz/mags))
+    
+    # Get ECI vectors from the catalog
+    matched_eci = mini_vecs[visible_mask][in_frame][:5]
+    
+    # Run Python QUEST
+    calculated_q = compute_attitude_quest(matched_eci, measured_body)
 
     print("\n==================================================")
     print(" COPY AND PASTE THIS INTO mock_fpga.c:")
@@ -106,6 +121,12 @@ def main():
     
     print("\n==================================================")
     print(f" EXPECTED HIP IDs ON STM32: {final_hips.tolist()}")
+    print("--------------------------------------------------")
+    print(" EXPECTED QUEST QUATERNION ON STM32:")
+    print(f" Qx = {calculated_q[0]:.6f}")
+    print(f" Qy = {calculated_q[1]:.6f}")
+    print(f" Qz = {calculated_q[2]:.6f}")
+    print(f" Qw = {calculated_q[3]:.6f}")
     print("==================================================\n")
 
 if __name__ == "__main__":

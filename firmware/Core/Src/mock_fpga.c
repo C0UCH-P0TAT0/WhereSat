@@ -22,20 +22,20 @@ void load_test_centroids(FPGA_Packet_t *packet) {
     packet->count = 5;
 
 
-    packet->centroids[0].x = 430.250f; 
-    packet->centroids[0].y = 272.508f;
+    packet->centroids[0].x = 221.254f; 
+    packet->centroids[0].y = 706.314f;
 
-    packet->centroids[1].x = 293.709f;
-    packet->centroids[1].y = 525.921f;
+    packet->centroids[1].x = 402.506f;
+    packet->centroids[1].y = 104.142f;
 
-    packet->centroids[2].x = 1019.443f; 
-    packet->centroids[2].y = 224.526f;
+    packet->centroids[2].x = 537.113f; 
+    packet->centroids[2].y = 360.798f;
 
-    packet->centroids[3].x = 611.826f;  
-    packet->centroids[3].y = 574.466f;
+    packet->centroids[3].x = 732.994f;  
+    packet->centroids[3].y = 935.482f;
 
-    packet->centroids[4].x = 466.203f;  
-    packet->centroids[4].y = 738.495f;
+    packet->centroids[4].x = 757.583f;  
+    packet->centroids[4].y = 122.016f;
 
     // 3. Calculate checksum
     uint8_t calc_checksum = 0;
