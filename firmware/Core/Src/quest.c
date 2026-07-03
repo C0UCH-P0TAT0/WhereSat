@@ -10,7 +10,7 @@
 
 #include "quest.h"
 #include <string.h>
-
+#include "math.h"
 /**
  * @brief Computes the optimal quaternion using the QUEST algorithm.
  */

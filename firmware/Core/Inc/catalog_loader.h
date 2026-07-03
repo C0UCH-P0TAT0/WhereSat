@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-
+#include "camera_geometry.h"
 // ---------------------------------------------------------
 // Data Structures
 // ---------------------------------------------------------
@@ -32,7 +32,7 @@ bool catalog_init(void);
 // Returns the total number of items in the database
 uint32_t catalog_get_num_stars(void);
 uint32_t catalog_get_num_triangles(void);
-
+void catalog_get_star_vector(uint32_t hip_id, Vector3_t *out_vec);
 // Fetches data at a specific index. Returns false if index is out of bounds.
 bool catalog_get_star(uint32_t index, StarVector *out_star);
 bool catalog_get_triangle(uint32_t index, TriangleEntry *out_triangle);
