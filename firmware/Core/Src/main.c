@@ -1,14 +1,21 @@
+/* USER CODE BEGIN Header */
 /**
- * @file main.c
- * @brief Main program body with QUEST Integration and Convention Verification.
- *
- * This file implements the full Lost-in-Space pipeline:
- * Mock Centroids -> Body Vectors -> Star ID -> QUEST -> Attitude.
- * It includes a dual-direction check to verify if the quaternion represents
- * Reference-to-Body or Body-to-Reference.
- *
- * @author Aditya (WhereSat Team)
- */
+  ******************************************************************************
+  * @file           : main.c
+  * @brief          : Main program body with Full ADCS Pipeline Integration.
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2026 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
+  ******************************************************************************
+  */
+/* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "spi.h"
@@ -29,11 +36,37 @@
 #include "star_matcher.h"
 #include "quaternion.h"
 #include "quest.h"
+#include "test_pipeline.h"
 /* USER CODE END Includes */
+
+/* Private typedef -----------------------------------------------------------*/
+/* USER CODE BEGIN PTD */
+
+/* USER CODE END PTD */
+
+/* Private define ------------------------------------------------------------*/
+/* USER CODE BEGIN PD */
+
+/* USER CODE END PD */
+
+/* Private macro -------------------------------------------------------------*/
+/* USER CODE BEGIN PM */
+
+/* USER CODE END PM */
+
+/* Private variables ---------------------------------------------------------*/
+
+/* USER CODE BEGIN PV */
+
+/* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
+/* USER CODE BEGIN PFP */
 
+/* USER CODE END PFP */
+
+/* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 /**
  * @brief Redirects standard output (printf) to UART2.
@@ -47,14 +80,29 @@ int __io_putchar(int ch) {
 
 /**
   * @brief  The application entry point.
+  * @retval int
   */
 int main(void)
 {
+  /* USER CODE BEGIN 1 */
+
+  /* USER CODE END 1 */
+
+  /* MCU Configuration--------------------------------------------------------*/
+
   /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
   HAL_Init();
 
-  /* Configure the system clock to 180MHz */
+  /* USER CODE BEGIN Init */
+
+  /* USER CODE END Init */
+
+  /* Configure the system clock */
   SystemClock_Config();
+
+  /* USER CODE BEGIN SysInit */
+
+  /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
@@ -62,16 +110,14 @@ int main(void)
   MX_USART2_UART_Init();
 
   /* USER CODE BEGIN 2 */
+  // Ensure SPI Chip Select (PA4) starts HIGH (Inactive)
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET);
 
   printf("\r\n====================================\r\n");
-  printf(" WHERESAT STAR TRACKER - WEEK 7\r\n");
+  printf(" WHERESAT STAR TRACKER - WEEK 8\r\n");
   printf(" System Clock: %lu MHz\r\n", (unsigned long)(HAL_RCC_GetHCLKFreq() / 1000000));
-  printf(" Pipeline: StarID -> QUEST\r\n");
+  printf(" Pipeline: StarID -> QUEST -> MEKF -> Control\r\n");
   printf("====================================\r\n");
-
-  // Verify Aditya's geometry math
-  test_camera_geometry();
 
   // Initialize the Star Catalog
   if (catalog_init() == false) {
@@ -80,116 +126,98 @@ int main(void)
       printf("Database Loaded: %lu Stars, %lu Triangles\r\n", 
              catalog_get_num_stars(), catalog_get_num_triangles());
   }
+
+  // ======================================================
+  // RUN AUTOMATED REGRESSION TESTS (Yash's Week 8 Task)
+  // ======================================================
+  run_all_tests();
+
   /* USER CODE END 2 */
 
+  /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  FPGA_Packet_t current_packet;
-  ObservedStar live_stars[MAX_CENTROIDS];
-  ObservedTriangle triangles[MAX_OBSERVED_TRIANGLES];
-  MatchedStar final_matches[MAX_CENTROIDS];
+    FPGA_Packet_t current_packet;
+    ObservedStar live_stars[MAX_CENTROIDS];
+    ObservedTriangle triangles[MAX_OBSERVED_TRIANGLES];
+    MatchedStar final_matches[MAX_CENTROIDS];
+    
+    QUEST_Input_t quest_data;
+    Quaternion_t estimated_q;
 
-  QUEST_Input_t quest_data;
-  Quaternion_t estimated_q;
-  int matched_source_indices[MAX_CENTROIDS]; // Map QUEST input back to original star index
+    // Sockets for Aditya's Week 8 Tasks
+    // float gyro_data[3] = {0.01f, -0.02f, 0.005f}; // Fake gyro data
+    // float torque_cmd[3] = {0.0f, 0.0f, 0.0f};
 
-  while (1)
-  {
-      // 1. Get Centroid Data (Mocked)
-      load_test_centroids(&current_packet);
+    while (1)
+    {
+        // 1. INGEST: Get Centroid Data (Mocked for now, later real SPI)
+        load_test_centroids(&current_packet);
 
-      if (fpga_validate_packet(&current_packet)) {
+        if (fpga_validate_packet(&current_packet)) {
+            
+            // 2. GEOMETRY: Pixels -> Body Vectors
+            for (int i = 0; i < current_packet.count; i++) {
+                Vector3_t vec = pixel_to_vector(current_packet.centroids[i]);
+                live_stars[i].local_id = i;
+                live_stars[i].x = vec.x;
+                live_stars[i].y = vec.y;
+                live_stars[i].z = vec.z;
+            }
 
-          printf("\r\n--- PROCESSING NEW FRAME (%d Stars) ---\r\n", current_packet.count);
+            // 3. STAR ID: Build Triangles & Match (Yash's Engine)
+            uint16_t num_triangles = 0;
+            build_triangles(live_stars, current_packet.count, triangles, &num_triangles);
+            match_stars(triangles, num_triangles, current_packet.count, final_matches);
 
-          // 2. Camera Geometry: Pixels -> Body Vectors
-          for (int i = 0; i < current_packet.count; i++) {
-              Vector3_t vec = pixel_to_vector(current_packet.centroids[i]);
-              live_stars[i].local_id = i;
-              live_stars[i].x = vec.x;
-              live_stars[i].y = vec.y;
-              live_stars[i].z = vec.z;
-          }
+            // 4. QUEST: Prepare Data & Solve (Aditya's Engine)
+            quest_data.count = 0;
+            for (int i = 0; i < current_packet.count; i++) {
+                if (final_matches[i].is_matched) {
+                    quest_data.body_v[quest_data.count] = (Vector3_t){live_stars[i].x, live_stars[i].y, live_stars[i].z};
+                    catalog_get_star_vector(final_matches[i].hip_id, &quest_data.reference_v[quest_data.count]);
+                    quest_data.weights[quest_data.count] = 1.0f;
+                    quest_data.count++;
+                }
+            }
 
-          // 3. Star Identification: Build Triangles & Match
-          uint16_t num_triangles = 0;
-          build_triangles(live_stars, current_packet.count, triangles, &num_triangles);
-          match_stars(triangles, num_triangles, current_packet.count, final_matches);
+            bool adcs_locked = false;
+            if (quest_data.count >= 2) {
+                estimated_q = quest_compute(&quest_data);
+                adcs_locked = true;
+            }
 
-          // 4. QUEST Integration: Prepare Observation/Reference Pairs
-          quest_data.count = 0;
-          for (int i = 0; i < current_packet.count; i++) {
-              if (final_matches[i].is_matched) {
-                  // Store mapping for debug printing
-                  matched_source_indices[quest_data.count] = i;
+            // ==========================================================
+            // 5. MEKF: Sensor Fusion (Aditya's Week 8 Task)
+            // ==========================================================
+            // mekf_predict(gyro_data, dt);
+            // if (adcs_locked) {
+            //     mekf_update(estimated_q);
+            // }
+            // Quaternion_t filtered_q = mekf_get_attitude();
 
-                  // Populate QUEST input arrays
-                  quest_data.body_v[quest_data.count] = (Vector3_t){live_stars[i].x, live_stars[i].y, live_stars[i].z};
-                  catalog_get_star_vector(final_matches[i].hip_id, &quest_data.reference_v[quest_data.count]);
+            // ==========================================================
+            // 6. CONTROLLER: Calculate Torque (Aditya's Week 8 Task)
+            // ==========================================================
+            // controller_compute_torque(filtered_q, target_q, gyro_data, torque_cmd);
 
-                  quest_data.weights[quest_data.count] = 1.0f;
-                  quest_data.count++;
-              }
-          }
+            // 7. TELEMETRY: Clean, professional output
+            if (adcs_locked) {
+                printf("[TELEMETRY] Stars: %d | Locked: YES | Q: [%.4f, %.4f, %.4f, %.4f]\r\n", 
+                       quest_data.count, estimated_q.q0, estimated_q.q1, estimated_q.q2, estimated_q.q3);
+            } else {
+                printf("[TELEMETRY] Stars: %d | Locked: NO  | Q: [N/A]\r\n", quest_data.count);
+            }
+        } else {
+            printf("[TELEMETRY] SPI Packet Corrupted!\r\n");
+        }
 
-          // 5. Compute Attitude and Verify Convention
-          if (quest_data.count >= 2) {
-
-              // Debug: Print Matched Vectors (Corrected Indexing)
-              printf("\nQUEST Input Vectors:\n");
-              for(int i=0; i < quest_data.count; i++) {
-                  int original_idx = matched_source_indices[i];
-                  printf("[%d] HIP ID: %lu\n", i, final_matches[original_idx].hip_id);
-                  printf("  Ref : [% .6f, % .6f, % .6f]\n",
-                         quest_data.reference_v[i].x, quest_data.reference_v[i].y, quest_data.reference_v[i].z);
-                  printf("  Body: [% .6f, % .6f, % .6f]\n",
-                         quest_data.body_v[i].x, quest_data.body_v[i].y, quest_data.body_v[i].z);
-              }
-
-              estimated_q = quest_compute(&quest_data);
-
-              printf("\r\n>>> ATTITUDE DETERMINED <<<\r\n");
-              printf("Quaternion [w, x, y, z]:\r\n");
-              printf("[ %.6f, %.6f, %.6f, %.6f ]\r\n",
-                     estimated_q.q0, estimated_q.q1, estimated_q.q2, estimated_q.q3);
-
-              /* ---------- Direction Check ---------- */
-              Vector3_t expected = quest_data.body_v[0];
-
-              // Test Original Quaternion (q)
-              Vector3_t actual = quat_rotate_vector(estimated_q, quest_data.reference_v[0]);
-
-              // Test Conjugate (q_conj)
-              Quaternion_t qc = quat_conjugate(estimated_q);
-              Vector3_t actual_inv = quat_rotate_vector(qc, quest_data.reference_v[0]);
-
-              printf("\r\nDirection Check (Rotated Ref vs Measured Body):\r\n");
-              printf("Expected:        [% .3f, % .3f, % .3f]\r\n", expected.x, expected.y, expected.z);
-              printf("Actual (q):      [% .3f, % .3f, % .3f]\r\n", actual.x, actual.y, actual.z);
-              printf("Actual (q_conj): [% .3f, % .3f, % .3f]\r\n", actual_inv.x, actual_inv.y, actual_inv.z);
-
-              // Calculate Errors (Optimized dx*dx)
-              float dx = expected.x - actual.x;
-              float dy = expected.y - actual.y;
-              float dz = expected.z - actual.z;
-              float err = sqrtf(dx*dx + dy*dy + dz*dz);
-
-              float dx_inv = expected.x - actual_inv.x;
-              float dy_inv = expected.y - actual_inv.y;
-              float dz_inv = expected.z - actual_inv.z;
-              float err_inv = sqrtf(dx_inv*dx_inv + dy_inv*dy_inv + dz_inv*dz_inv);
-
-              printf("Direction Error (q)      = %.6f\r\n", err);
-              printf("Direction Error (q_conj) = %.6f\r\n", err_inv);
-
-          } else {
-              printf("\r\n>>> ATTITUDE FAILED: Insufficient matches (%d/2) <<<\r\n", quest_data.count);
-          }
-      }
-
-      HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);
-      HAL_Delay(5000);
+        HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5); // Heartbeat LED
+        HAL_Delay(1000); // 1Hz telemetry loop for testing
     /* USER CODE END WHILE */
+
+    /* USER CODE BEGIN 3 */
   }
+  /* USER CODE END 3 */
 }
 
 /**
@@ -241,3 +269,9 @@ void Error_Handler(void)
   __disable_irq();
   while (1) {}
 }
+
+#ifdef USE_FULL_ASSERT
+void assert_failed(uint8_t *file, uint32_t line)
+{
+}
+#endif /* USE_FULL_ASSERT */
