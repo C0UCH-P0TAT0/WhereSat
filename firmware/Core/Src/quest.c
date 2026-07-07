@@ -1,9 +1,10 @@
 /**
  * @file quest.c
- * @brief QUEST implementation with a robust Jacobi Eigensolver.
+ * @brief QUEST / Davenport q-method implementation (Scalar-Last [x, y, z, w]).
  * 
- * This version uses the standard Jacobi rotation algorithm to ensure 
- * numerical stability and orthogonality of eigenvectors.
+ * This implementation constructs the Davenport K-matrix in the vector-first
+ * layout to match Python. It extracts the dominant eigenvector and maps it
+ * to the x, y, z, w members of the Quaternion_t struct.
  * 
  * @author Aditya (WhereSat Team)
  */
@@ -18,12 +19,8 @@
 
 /**
  * @brief Robust Symmetric 4x4 Jacobi Eigensolver.
- * 
- * This implementation uses the stable "Numerical Recipes" update logic.
- * A is the symmetric matrix (modified to diagonal), V is the eigenvector matrix.
  */
 static void jacobi_4x4(float A[4][4], float V[4][4]) {
-    // Initialize V as Identity
     for (int i = 0; i < 4; i++) {
         for (int j = 0; j < 4; j++) {
             V[i][j] = (i == j) ? 1.0f : 0.0f;
@@ -31,27 +28,23 @@ static void jacobi_4x4(float A[4][4], float V[4][4]) {
     }
 
     for (int iter = 0; iter < JACOBI_MAX_ITERATIONS; iter++) {
-        // 1. Find the largest off-diagonal element
         int p = 0, q = 1;
         float max_off_diag = fabsf(A[0][1]);
         for (int i = 0; i < 4; i++) {
             for (int j = i + 1; j < 4; j++) {
                 if (fabsf(A[i][j]) > max_off_diag) {
                     max_off_diag = fabsf(A[i][j]);
-                    p = i;
-                    q = j;
+                    p = i; q = j;
                 }
             }
         }
 
-        // Convergence check
         if (max_off_diag < JACOBI_EPSILON) break;
 
-        // 2. Compute rotation parameters
         float h = A[q][q] - A[p][p];
         float t;
         if (fabsf(h) + fabsf(A[p][q]) == fabsf(h)) {
-            t = A[p][q] / h; // t = tan(phi)
+            t = A[p][q] / h;
         } else {
             float theta = 0.5f * h / A[p][q];
             t = 1.0f / (fabsf(theta) + sqrtf(1.0f + theta * theta));
@@ -63,13 +56,11 @@ static void jacobi_4x4(float A[4][4], float V[4][4]) {
         float tau = s / (1.0f + c);
         float g = t * A[p][q];
 
-        // 3. Update diagonal and zero out A[p][q]
         A[p][p] -= g;
         A[q][q] += g;
         A[p][q] = 0.0f;
         A[q][p] = 0.0f;
 
-        // 4. Update off-diagonal elements (p and q rows/cols)
         for (int i = 0; i < 4; i++) {
             if (i != p && i != q) {
                 float g_p = A[i][p];
@@ -81,7 +72,6 @@ static void jacobi_4x4(float A[4][4], float V[4][4]) {
             }
         }
 
-        // 5. Update Eigenvector matrix V
         for (int i = 0; i < 4; i++) {
             float v_p = V[i][p];
             float v_q = V[i][q];
@@ -92,8 +82,9 @@ static void jacobi_4x4(float A[4][4], float V[4][4]) {
 }
 
 Quaternion_t quest_compute(QUEST_Input_t *input) {
+    /* Guard: Minimum 2 stars required */
     if (input->count < 2) {
-        return (Quaternion_t){1.0f, 0.0f, 0.0f, 0.0f};
+        return (Quaternion_t){0.0f, 0.0f, 0.0f, 1.0f};
     }
 
     float B[3][3] = {{0}};
@@ -134,12 +125,6 @@ Quaternion_t quest_compute(QUEST_Input_t *input) {
     memcpy(K_work, K, sizeof(K));
     jacobi_4x4(K_work, V);
 
-    /* Convergence Check: Print Eigenvalues */
-    printf("\nEigenvalues (Diagonal of K_work):\n");
-    for(int i = 0; i < 4; i++) {
-        printf("  L[%d]: % .6f\n", i, K_work[i][i]);
-    }
-
     /* Find dominant eigenvalue */
     int max_idx = 0;
     float max_eig = K_work[0][0];
@@ -150,15 +135,19 @@ Quaternion_t quest_compute(QUEST_Input_t *input) {
         }
     }
 
-    /* Map [x, y, z, w] eigenvector to [w, x, y, z] quaternion */
+    /* Map Eigenvector [V0, V1, V2, V3] to Scalar-Last Struct [x, y, z, w] */
     Quaternion_t out;
-    out.q0 = V[3][max_idx]; // w
-    out.q1 = V[0][max_idx]; // x
-    out.q2 = V[1][max_idx]; // y
-    out.q3 = V[2][max_idx]; // z
+    out.x = V[0][max_idx];
+    out.y = V[1][max_idx];
+    out.z = V[2][max_idx];
+    out.w = V[3][max_idx]; // Scalar (w) is the 4th element
 
-    if (out.q0 < 0) {
-        out.q0 = -out.q0; out.q1 = -out.q1; out.q2 = -out.q2; out.q3 = -out.q3;
+    /* Canonical form: Ensure scalar part (w) is positive */
+    if (out.w < 0) {
+        out.x = -out.x;
+        out.y = -out.y;
+        out.z = -out.z;
+        out.w = -out.w;
     }
 
     return quat_normalize(out);

@@ -1,9 +1,9 @@
 /**
  * @file quaternion.h
- * @brief Shared quaternion library for QUEST, MEKF, and Control logic.
+ * @brief Quaternion math library using Scalar-Last [x, y, z, w] convention.
  *
- * Provides standard 4-element quaternion structures and operations including
- * multiplication, conjugation, and vector rotation.
+ * This header defines the 4-element quaternion structure where the
+ * scalar component (w) is stored at the end of the struct.
  *
  * @author Aditya (WhereSat Team)
  */
@@ -11,16 +11,16 @@
 #ifndef INC_QUATERNION_H_
 #define INC_QUATERNION_H_
 
-#include "camera_geometry.h" // For Vector3_t
+#include "camera_geometry.h"
 
 /**
- * @brief Quaternion structure [q0, q1, q2, q3] where q0 is scalar.
+ * @brief Quaternion structure [x, y, z, w] where w is scalar.
  */
 typedef struct {
-    float q0; // Scalar part
-    float q1; // Vector x
-    float q2; // Vector y
-    float q3; // Vector z
+    float x;
+    float y;
+    float z;
+    float w; // Scalar component
 } Quaternion_t;
 
 /* Function Prototypes */

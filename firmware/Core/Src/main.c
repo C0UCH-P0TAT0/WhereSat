@@ -5,10 +5,11 @@
  * This file implements the full Lost-in-Space pipeline:
  * Mock Centroids -> Body Vectors -> Star ID -> QUEST -> Attitude.
  * It includes a dual-direction check to verify if the quaternion represents
- * Reference-to-Body or Body-to-Reference.
+ * Reference-to-Body or Body-to-Reference using the [x, y, z, w] convention.
  *
  * @author Aditya (WhereSat Team)
  */
+
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "spi.h"
@@ -65,9 +66,9 @@ int main(void)
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET);
 
   printf("\r\n====================================\r\n");
-  printf(" WHERESAT STAR TRACKER - WEEK 7\r\n");
+  printf(" WHERESAT STAR TRACKER - WEEK 7/8\r\n");
   printf(" System Clock: %lu MHz\r\n", (unsigned long)(HAL_RCC_GetHCLKFreq() / 1000000));
-  printf(" Pipeline: StarID -> QUEST\r\n");
+  printf(" Convention: Scalar-Last [x, y, z, w]\r\n");
   printf("====================================\r\n");
 
   // Verify Aditya's geometry math
@@ -148,9 +149,9 @@ int main(void)
               estimated_q = quest_compute(&quest_data);
 
               printf("\r\n>>> ATTITUDE DETERMINED <<<\r\n");
-              printf("Quaternion [w, x, y, z]:\r\n");
+              printf("Quaternion [x, y, z, w]:\r\n");
               printf("[ %.6f, %.6f, %.6f, %.6f ]\r\n",
-                     estimated_q.q0, estimated_q.q1, estimated_q.q2, estimated_q.q3);
+                     estimated_q.x, estimated_q.y, estimated_q.z, estimated_q.w);
 
               /* ---------- Direction Check ---------- */
               Vector3_t expected = quest_data.body_v[0];
@@ -194,7 +195,6 @@ int main(void)
 
 /**
   * @brief System Clock Configuration
-  * @retval None
   */
 void SystemClock_Config(void)
 {
