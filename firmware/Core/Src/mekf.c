@@ -59,8 +59,8 @@ void mekf_init(MEKF_t *f, Quaternion_t initial_q) {
     for(int i=0; i<3; i++) f->P[i][i] = 0.1f;
     for(int i=3; i<6; i++) f->P[i][i] = 0.001f;
 
-    f->Q_v = 1e-7f; // Gyro noise variance
-    f->Q_u = 1e-10f; // Bias random walk variance
+    f->Q_v = 1e-3f; // Gyro noise variance
+    f->Q_u = 3e-10f; // Bias random walk variance
 }
 
 void mekf_predict(MEKF_t *f, Vector3_t omega_meas, float dt) {
