@@ -1,157 +1,160 @@
-import math
-import struct
-import sys
-import os
-import itertools
+"""
+@file export_catalog.py
+@brief Highly optimized Star Catalog Compiler for WhereSat.
+
+This script processes raw Hipparcos data, filters for guide stars, 
+generates triangle fingerprints using graph-theoretic intersections, 
+and exports the results to C headers and binary files for the STM32.
+
+Optimizations:
+1. Diagonal FOV Fix: Uses FOV * sqrt(2) for chord length.
+2. Graph Intersection: Reduces triangle search from O(N^3) to O(N_pairs).
+3. Vectorization: Uses NumPy for parallel geometry calculations.
+4. Binary Search Prep: Sorts database by the shortest angle.
+
+@author Aditya & Yash (WhereSat Team)
+"""
+
 import numpy as np
-from scipy.spatial import cKDTree
+from scipy.spatial import KDTree
+from collections import defaultdict
+import os
+import time
+import struct
+from pathlib import Path
 
 # ==========================================
-# CONFIGURATION CONSTANTS & EXACT PATHS
+# CONFIGURATION
 # ==========================================
-# Get the directory where this script lives (.../WhereSat/python_tools)
+MAX_MAGNITUDE = 4.5             # Standard for reliable Star ID
+MAX_FOV_DEGREES = 25.0          # Camera side-length
+# The Diagonal Fix: Maximum distance between two stars in a square FOV
+MAX_DIAGONAL_DEG = MAX_FOV_DEGREES * np.sqrt(2)
+
+# Path Logic
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-
-# Go up one level to the main WhereSat folder
 ROOT_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
-
-# Define the exact paths based on your folder structure
-CATALOG_FILE = os.path.join(ROOT_DIR, "data", "optimized_catalog.npy")
+CATALOG_INPUT = os.path.join(ROOT_DIR, "data", "optimized_catalog.npy")
 INC_DIR = os.path.join(ROOT_DIR, "Core", "Inc")
 BIN_DIR = os.path.join(ROOT_DIR, "data")
 
-# Production limits for Week 7
-MAX_MAGNITUDE = 2.5             
-MAX_FOV_DEGREES = 25.0          
-
-def ra_dec_to_vector(ra_deg, dec_deg):
-    ra = math.radians(ra_deg)
-    dec = math.radians(dec_deg)
-    x = math.cos(dec) * math.cos(ra)
-    y = math.cos(dec) * math.sin(ra)
-    z = math.sin(dec)
-    return (x, y, z)
-
-def angle_between(v1, v2):
-    dot_product = v1[0]*v2[0] + v1[1]*v2[1] + v1[2]*v2[2]
-    dot_product = max(-1.0, min(1.0, dot_product)) 
-    return math.acos(dot_product)
-
 def main():
-    print(f"Reading raw catalog from {CATALOG_FILE}...")
-    
-    star_table = []
-    
-    try:
-        catalog_data = np.load(CATALOG_FILE)
-    except FileNotFoundError:
-        print(f"Error: Could not find {CATALOG_FILE}.")
-        sys.exit(1)
+    print("--- 🚀 STARTING CATALOG COMPILATION ---")
+    start_time = time.time()
 
-    for row in catalog_data:
-        try:
-            if catalog_data.dtype.names is not None:
-                hip = int(row['id']) if 'id' in catalog_data.dtype.names else int(row['HIP'])
-                mag = float(row['mag']) if 'mag' in catalog_data.dtype.names else float(row['Vmag'])
-                x, y, z = float(row['x']), float(row['y']), float(row['z'])
-                vec = (x, y, z)
-            else:
-                hip = int(row[0])
-                vec = (float(row[1]), float(row[2]), float(row[3]))
-                mag = float(row[4])
-            
-            if mag <= MAX_MAGNITUDE:
-                star_table.append({'hip': hip, 'vec': vec})
-        except (ValueError, IndexError, KeyError):
-            continue
+    # 1. Load and Filter Catalog
+    if not os.path.exists(CATALOG_INPUT):
+        print(f"Error: Could not find {CATALOG_INPUT}")
+        return
 
-    print(f"Filtered down to {len(star_table)} stars (Magnitude <= {MAX_MAGNITUDE}).")
-
-    # ---------------------------------------------------------
-    # STEP 2: Generate Triangle Fingerprints (Memory Safe)
-    # ---------------------------------------------------------
-    print("Generating triangle combinations... (This will take a few minutes)")
-    triangle_table = []
-    max_fov_rad = math.radians(MAX_FOV_DEGREES)
-
-    vectors = [s['vec'] for s in star_table]
-    tree = cKDTree(vectors)
-    chord_length = 2.0 * math.sin(max_fov_rad / 2.0)
+    raw_data = np.load(CATALOG_INPUT)
+    # Filter by magnitude (Column 4)
+    guide_mask = raw_data[:, 4] <= MAX_MAGNITUDE
+    catalog = raw_data[guide_mask]
     
-    total_stars = len(star_table)
+    star_ids = catalog[:, 0].astype(np.uint32)
+    vectors = catalog[:, 1:4].astype(np.float32)
     
-    for i in range(total_stars):
-        # Print progress every 100 stars so you know it's working
-        if i % 100 == 0:
-            print(f"Processing star {i} of {total_stars}...")
-            
-        neighbors = tree.query_ball_point(star_table[i]['vec'], chord_length)
-        valid_neighbors = [idx for idx in neighbors if idx > i]
+    num_stars = len(catalog)
+    print(f"   -> Guide Stars: {num_stars} (Mag <= {MAX_MAGNITUDE})")
+
+    # 2. Map Spatial Network (Pairs)
+    # Chord length formula: L = sqrt(2 - 2*cos(theta))
+    max_diagonal_rad = np.radians(MAX_DIAGONAL_DEG)
+    max_chord = np.sqrt(2 - 2 * np.cos(max_diagonal_rad))
+    
+    print(f"   -> Mapping pairs within {MAX_DIAGONAL_DEG:.2f}° diagonal...")
+    tree = KDTree(vectors)
+    pairs = tree.query_pairs(r=max_chord)
+    
+    # 3. Graph Theory Triangle Search
+    print("   -> Executing set intersections for triangles...")
+    adj = defaultdict(set)
+    for i, j in pairs:
+        adj[i].add(j) # query_pairs guarantees i < j
         
-        for j, k in itertools.combinations(valid_neighbors, 2):
-            d23 = angle_between(star_table[j]['vec'], star_table[k]['vec'])
+    tri_indices = []
+    for i, j in pairs:
+        # Common neighbors of i and j form a triangle
+        common = adj[i].intersection(adj[j])
+        for k in common:
+            tri_indices.append((i, j, k))
             
-            if d23 <= max_fov_rad:
-                d12 = angle_between(star_table[i]['vec'], star_table[j]['vec'])
-                d13 = angle_between(star_table[i]['vec'], star_table[k]['vec'])
-                
-                angles = sorted([d12, d23, d13])
-                triangle_table.append({
-                    'angles': angles,
-                    'hips': [star_table[i]['hip'], star_table[j]['hip'], star_table[k]['hip']]
-                })
+    tri_indices = np.array(tri_indices)
+    num_triangles = len(tri_indices)
+    print(f"   -> Found {num_triangles:,} valid triangles.")
 
-    # ---------------------------------------------------------
-    # STEP 3: Sort the Triangle Database
-    # ---------------------------------------------------------
-    print(f"\nSorting {len(triangle_table)} valid triangles for binary search...")
-    triangle_table.sort(key=lambda t: (t['angles'][0], t['angles'][1]))
-
-    # ---------------------------------------------------------
-    # STEP 4: Export to C Headers and Binary
-    # ---------------------------------------------------------
-    print("Exporting files...")
+    # 4. Vectorized Geometry (Parallel Arccos)
+    print("   -> Vectorizing geometry calculations...")
+    v1 = vectors[tri_indices[:, 0]]
+    v2 = vectors[tri_indices[:, 1]]
+    v3 = vectors[tri_indices[:, 2]]
     
+    # Dot products
+    d12 = np.clip(np.sum(v1 * v2, axis=1), -1.0, 1.0)
+    d23 = np.clip(np.sum(v2 * v3, axis=1), -1.0, 1.0)
+    d31 = np.clip(np.sum(v3 * v1, axis=1), -1.0, 1.0)
+    
+    # Convert to angles and sort each row [Short, Mid, Long]
+    angles = np.column_stack((np.arccos(d12), np.arccos(d23), np.arccos(d31)))
+    angles.sort(axis=1)
+    
+    # Map back to HIP IDs
+    hips = np.column_stack((
+        star_ids[tri_indices[:, 0]],
+        star_ids[tri_indices[:, 1]],
+        star_ids[tri_indices[:, 2]]
+    ))
+
+    # 5. Sort Database for Binary Search
+    # We sort by the shortest angle (Column 0) so the MCU can search efficiently
+    print("   -> Sorting database for Binary Search...")
+    sort_idx = np.argsort(angles[:, 0])
+    sorted_angles = angles[sort_idx]
+    sorted_hips = hips[sort_idx]
+
+    # 6. Export to Files
     os.makedirs(INC_DIR, exist_ok=True)
     os.makedirs(BIN_DIR, exist_ok=True)
 
-    meta_path = os.path.join(INC_DIR, "catalog_metadata.h")
-    with open(meta_path, "w") as f:
-        f.write("/* AUTO-GENERATED FILE - DO NOT EDIT */\n")
-        f.write("#ifndef CATALOG_METADATA_H\n#define CATALOG_METADATA_H\n\n")
-        f.write(f"#define CATALOG_NUM_STARS {len(star_table)}\n")
-        f.write(f"#define CATALOG_NUM_TRIANGLES {len(triangle_table)}\n\n")
-        f.write("#endif // CATALOG_METADATA_H\n")
+    # A. catalog_metadata.h
+    with open(os.path.join(INC_DIR, "catalog_metadata.h"), "w") as f:
+        f.write("/* AUTO-GENERATED */\n#ifndef CATALOG_METADATA_H\n#define CATALOG_METADATA_H\n\n")
+        f.write(f"#define CATALOG_NUM_STARS {num_stars}\n")
+        f.write(f"#define CATALOG_NUM_TRIANGLES {num_triangles}\n\n")
+        f.write("#endif")
 
-    cat_path = os.path.join(INC_DIR, "catalog.h")
-    with open(cat_path, "w") as f:
-        f.write("/* AUTO-GENERATED FILE - DO NOT EDIT */\n")
-        f.write("#ifndef CATALOG_H\n#define CATALOG_H\n\n")
-        f.write("#include <stdint.h>\n\n")
+    # B. catalog.h (C Arrays)
+    print("   -> Writing C header...")
+    with open(os.path.join(INC_DIR, "catalog.h"), "w") as f:
+        f.write("/* AUTO-GENERATED */\n#ifndef CATALOG_H\n#define CATALOG_H\n#include <stdint.h>\n\n")
         
-        f.write("// Format: {HIP_ID, X, Y, Z}\n")
-        f.write(f"const float CATALOG_STAR_VECTORS[{len(star_table)}][4] = {{\n")
-        for s in star_table:
-            f.write(f"    {{{s['hip']}, {s['vec'][0]:.6f}, {s['vec'][1]:.6f}, {s['vec'][2]:.6f}}},\n")
+        # Star Vectors
+        f.write(f"const float CATALOG_STAR_VECTORS[{num_stars}][4] = {{\n")
+        for i in range(num_stars):
+            f.write(f"    {{{star_ids[i]}, {vectors[i,0]:.6f}f, {vectors[i,1]:.6f}f, {vectors[i,2]:.6f}f}},\n")
         f.write("};\n\n")
 
-        f.write("// Format: {Small_Angle, Mid_Angle, Large_Angle, HIP1, HIP2, HIP3}\n")
-        f.write(f"const float CATALOG_TRIANGLES[{len(triangle_table)}][6] = {{\n")
-        for t in triangle_table:
-            f.write(f"    {{{t['angles'][0]:.6f}, {t['angles'][1]:.6f}, {t['angles'][2]:.6f}, ")
-            f.write(f"{t['hips'][0]}, {t['hips'][1]}, {t['hips'][2]}}},\n")
+        # Triangle Database
+        f.write(f"const float CATALOG_TRIANGLES[{num_triangles}][3] = {{\n")
+        for i in range(num_triangles):
+            f.write(f"    {{{sorted_angles[i,0]:.6f}f, {sorted_angles[i,1]:.6f}f, {sorted_angles[i,2]:.6f}f}},\n")
         f.write("};\n\n")
-        
-        f.write("#endif // CATALOG_H\n")
 
-    bin_path = os.path.join(BIN_DIR, "catalog.bin")
-    with open(bin_path, "wb") as f:
-        for s in star_table:
-            f.write(struct.pack("<I3f", s['hip'], *s['vec']))
-        for t in triangle_table:
-            f.write(struct.pack("<3f3I", *t['angles'], *t['hips']))
+        # Triangle HIP IDs
+        f.write(f"const uint32_t CATALOG_TRIANGLE_IDS[{num_triangles}][3] = {{\n")
+        for i in range(num_triangles):
+            f.write(f"    {{{sorted_hips[i,0]}, {sorted_hips[i,1]}, {sorted_hips[i,2]}}},\n")
+        f.write("};\n\n#endif")
 
-    print(f"Export complete! Files saved to:\n - {meta_path}\n - {cat_path}\n - {bin_path}")
+    # C. catalog.bin (Binary for Flash)
+    with open(os.path.join(BIN_DIR, "catalog.bin"), "wb") as f:
+        for i in range(num_stars):
+            f.write(struct.pack("<I3f", star_ids[i], *vectors[i]))
+        for i in range(num_triangles):
+            f.write(struct.pack("<3f3I", *sorted_angles[i], *sorted_hips[i]))
+
+    print(f"--- ✅ SUCCESS: Compilation took {time.time() - start_time:.2f}s ---")
 
 if __name__ == "__main__":
     main()

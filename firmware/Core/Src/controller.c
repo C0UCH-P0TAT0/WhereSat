@@ -17,9 +17,15 @@ Vector3_t controller_compute_torque(PD_Controller_t *c, Quaternion_t q_curr, Qua
 
     // 2. PD Law: T = 2*Kp*q_vec - Kd*omega
     Vector3_t t;
+<<<<<<< HEAD
     t.x = ( c->Kp * (s * q_err.x)) - (c->Kd * omega.x);
     t.y = ( c->Kp * (s * q_err.y)) - (c->Kd * omega.y);
     t.z = ( c->Kp * (s * q_err.z)) - (c->Kd * omega.z);
+=======
+    t.x = (2.0f * c->Kp * (s * q_err.x)) - (c->Kd * omega.x);
+    t.y = (2.0f * c->Kp * (s * q_err.y)) - (c->Kd * omega.y);
+    t.z = (2.0f * c->Kp * (s * q_err.z)) - (c->Kd * omega.z);
+>>>>>>> a6a97ae6946fb7a31bdf1bfdf87451ffcdd58f8d
 
     // 3. Per-Axis Saturation
     if (t.x >  MAX_TORQUE) t.x =  MAX_TORQUE;

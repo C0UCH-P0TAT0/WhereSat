@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 # [NEW] TASK 1: THE VIVADO HARDWARE BRIDGE
 # We define this first so the noise injector can use it.
 # =========================================================
-def export_frame_to_mem(dirty_image_array: np.ndarray, filename: str = "data/tb_frame.mem"):
+def export_frame_to_mem(dirty_image_array: np.ndarray, filename: str = "fpga/tb/tb_frame.mem"):
     """
     Converts a 2D uint16 image into a 1D hex memory map for Vivado's $readmemh.
     """
@@ -51,7 +51,7 @@ def apply_sensor_dirt(clean_image: np.ndarray, readout_sigma: float, hot_pixel_f
     # -----------------------------------------------------
     # [NEW] TASK 1 TRIGGER: Call the exporter right here!
     # -----------------------------------------------------
-    export_frame_to_mem(final_uint16_image, filename="tb_frame.mem")
+    export_frame_to_mem(final_uint16_image, filename="fpga/tb/tb_frame.mem")
     
     return final_uint16_image
 
