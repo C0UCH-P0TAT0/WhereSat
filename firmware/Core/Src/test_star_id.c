@@ -8,17 +8,16 @@ bool test_star_id_module(void) {
     printf("  [TEST] Running Star ID Module...\r\n");
 
     // 1. ARRANGE: The Golden Reference Inputs (Pixels)
-    // 1. ARRANGE: The Golden Reference Inputs (Pixels)
     Centroid_t test_pixels[5] = {
-        {132.400f, 24.300f},
-        {526.032f, 0.337f},
-        {674.371f, 172.428f},
-        {674.296f, 172.691f},
-        {154.017f, 619.347f}
+        {728.159f, 33.526f},
+        {272.877f, 119.884f},
+        {300.900f, 185.904f},
+        {319.573f, 253.054f},
+        {667.001f, 456.964f}
     };
     
     // The Golden Reference Expected Answers (HIP IDs)
-    uint32_t expected_hips[5] = {66447, 68483, 71453, 71456, 71634};
+    uint32_t expected_hips[5] = {24378, 25865, 26246, 26662, 27298};
 
     // 2. ACT: Run your pipeline
     ObservedStar live_stars[5];
