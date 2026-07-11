@@ -13,15 +13,16 @@ import pyqtgraph as pg
 # Import your modules
 from wheresat.renderer import render_star_field
 from wheresat.star_id import identify_stars, calculate_triangle_fingerprint, pixels_to_vectors
+np.set_printoptions(suppress=True, precision=6, floatmode='fixed')
 
 # --- 0. Control Center Toggles ---
-# FLIP THIS TO -1.0 IF THE SATELLITE ACCELERATES AWAY FROM THE TARGET
 TORQUE_POLARITY = 1.0 
 
 # --- 1. Protocol Constants ---
 SOF_HOST              = 0x55  
 SOF_TELEM             = 0xAA  
-TELEMETRY_PACKET_SIZE = 45    
+# UPDATED PACKET SIZE: 1 (SOF) + 18*4 (floats) + 2*1 (uint8) + 2 (CRC) = 77 bytes
+TELEMETRY_PACKET_SIZE = 77    
 MAX_CENTROIDS         = 26    
 
 # --- 2. System & Camera Constants ---
@@ -76,10 +77,22 @@ def build_host_packet(centroids, gyro_vec):
 
 def unpack_telemetry(data):
     if len(data) != TELEMETRY_PACKET_SIZE: return None
-    received_crc = struct.unpack("<H", data[43:45])[0]
-    if crc16_ccitt(data[:43]) != received_crc: return None
-    res = struct.unpack("<4f3f3fBB", data[1:43])
-    return {'q_est': np.array(res[0:4]), 'w_est': np.array(res[4:7]), 'torque': np.array(res[7:10]), 'locked': res[10], 'count': res[11]}
+    received_crc = struct.unpack("<H", data[75:77])[0]
+    if crc16_ccitt(data[:75]) != received_crc: return None
+    
+    # Unpack 18 floats and 2 uint8s
+    res = struct.unpack("<18fBB", data[1:75])
+    
+    return {
+        'q_est': np.array(res[0:4]), 
+        'w_est': np.array(res[4:7]), 
+        'torque': np.array(res[7:10]), 
+        'q_quest': np.array(res[10:14]),
+        'gyro_meas': np.array(res[14:17]),
+        'innovation_dot': res[17],
+        'locked': res[18], 
+        'count': res[19]
+    }
 
 # ==========================================================
 # Simulation Logic
@@ -102,8 +115,8 @@ class HILSimulation(QtCore.QThread):
             self.db_map = np.load(DB_MAP_PATH)
         except: self.db_tree = None
 
-        self.q = np.array([0.0, 0.0, 0.0, 1.0]) 
-        self.w = np.array([0.01, 0.01, 0.0])    
+        self.q = np.array([0.855121, -0.458259, -0.238438, 0.043744])  # Initial quaternion (45-degree rotation around Y-axis)
+        self.w = np.array([0.01, 0.01, 0.0])
         self.running = True
         self.frame_id = 0
 
@@ -116,6 +129,12 @@ class HILSimulation(QtCore.QThread):
 
             # 1. Project & Render based on TRUE physics state
             visible_stars = self.project_stars()
+            
+            # --- ADD THIS TO PRINT GROUND TRUTH ---
+            true_hip_ids = [int(star[0]) for star in visible_stars]
+            print(f"  [TRUTH] Projected HIP IDs: {true_hip_ids}")
+            # --------------------------------------
+
             img = render_star_field(visible_stars, IMAGE_WIDTH)
             print(f"  Step 1: Render OK ({len(visible_stars)} stars projected)")
             
@@ -141,7 +160,8 @@ class HILSimulation(QtCore.QThread):
 
             # 5. Handshake with STM32 (Send TRUE angular velocity as raw gyro)
             self.ser.reset_input_buffer()
-            self.ser.write(build_host_packet(rtl_centroids, self.w))
+            measured_w = self.w
+            self.ser.write(build_host_packet(rtl_centroids, measured_w))
             self.ser.flush()
             print(f"  Step 4: Data Sent to STM32")
 
@@ -211,30 +231,50 @@ class WhereSatGUI(QtWidgets.QMainWindow):
     def update_ui(self, data):
         self.img_view.setImage(data['image'].T, autoLevels=True)
         
-        q_target = np.array([0.382683, 0.0, 0.0, 0.923880])
-        q_est = data['q_est']
-        q_true = data['q_true']
+        q_target = np.array([0.855121, -0.458259, -0.238438, 0.043744])
+        
+        q_true  = data['q_true']
+        q_quest = data['q_quest']
+        q_est   = data['q_est']
 
-        # The 3 diagnostic dot products
-        dot_est = np.sum(q_target * q_est)
-        dot_true = np.sum(q_target * q_true)
-        dot_diff = np.sum(q_true * q_est)
+        # Dot Products (use abs because q and -q are identical attitudes)
+        dot_target_true  = abs(np.dot(q_target, q_true))
+        dot_target_quest = abs(np.dot(q_target, q_quest))
+        dot_target_est   = abs(np.dot(q_target, q_est))
 
-        info = (f"--- ADCS TELEMETRY (Frame {data['frame_id']}) ---\n"
-                f"Stars Matched: {data['count']}\n"
-                f"ADCS Locked:   {'YES' if data['locked'] else 'NO'}\n\n"
-                f"--- QUATERNION DOT DIAGNOSTICS ---\n"
-                f"dot_true (Plant -> Target): {dot_true:.6f}\n"
-                f"dot_est  (MEKF -> Target):  {dot_est:.6f}\n"
-                f"dot_diff (Plant -> MEKF):   {dot_diff:.6f}\n\n"
-                f"--- STATES ---\n"
-                f"q_target: {np.round(q_target, 6)}\n"
-                f"q_est:    {np.round(q_est, 6)}\n"
-                f"q_true:   {np.round(q_true, 6)}\n\n"
-                f"--- RATES & CONTROL ---\n"
-                f"w_est:    {np.round(data['w_est'], 6)}\n"
-                f"w_true:   {np.round(data['w_true'], 6)}\n"
-                f"torque:   {np.round(data['torque'], 6)}")
+        dot_true_quest   = abs(np.dot(q_true, q_quest))
+        dot_true_est     = abs(np.dot(q_true, q_est))
+        dot_quest_est    = abs(np.dot(q_quest, q_est))
+
+        info = (
+            f"================== WHERESAT ADCS ==================\n"
+            f"Frame:            {data['frame_id']}\n"
+            f"Stars Matched:    {data['count']}\n"
+            f"Locked:           {'YES' if data['locked'] else 'NO'}\n\n"
+
+            f"================= QUATERNIONS =====================\n"
+            f"Target : {np.round(q_target, 6)}\n"
+            f"True   : {np.round(q_true, 6)}\n"
+            f"QUEST  : {np.round(q_quest, 6)}\n"
+            f"MEKF   : {np.round(q_est, 6)}\n\n"
+
+            f"================= DOT PRODUCTS ===================\n"
+            f"Target <-> True  : {dot_target_true:.6f}\n"
+            f"Target <-> QUEST : {dot_target_quest:.6f}\n"
+            f"Target <-> MEKF  : {dot_target_est:.6f}\n\n"
+
+            f"True   <-> QUEST : {dot_true_quest:.6f}\n"
+            f"True   <-> MEKF  : {dot_true_est:.6f}\n"
+            f"QUEST  <-> MEKF  : {dot_quest_est:.6f}\n\n"
+
+            f"================ ANGULAR RATES ===================\n"
+            f"True Rate    : {np.round(data['w_true'], 6)}\n"
+            f"Raw Gyro     : {np.round(data['gyro_meas'], 6)}\n\n"
+
+            f"=================== CONTROL ======================\n"
+            f"Torque : {np.round(data['torque'], 6)}\n"
+            f"Innovation Dot : {data['innovation_dot']:.6f}"
+        )
         
         self.telem_text.setText(info)
 

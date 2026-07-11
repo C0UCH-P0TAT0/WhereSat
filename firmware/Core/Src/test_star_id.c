@@ -8,7 +8,6 @@ bool test_star_id_module(void) {
     printf("  [TEST] Running Star ID Module...\r\n");
 
     // 1. ARRANGE: The Golden Reference Inputs (Pixels)
-    // 1. ARRANGE: The Golden Reference Inputs (Pixels)
     Centroid_t test_pixels[5] = {
         {132.400f, 24.300f},
         {526.032f, 0.337f},
@@ -25,15 +24,21 @@ bool test_star_id_module(void) {
     for (int i = 0; i < 5; i++) {
         Vector3_t vec = pixel_to_vector(test_pixels[i]);
         live_stars[i].local_id = i;
-        live_stars[i].x = vec.x; live_stars[i].y = vec.y; live_stars[i].z = vec.z;
+        live_stars[i].x = vec.x; 
+        live_stars[i].y = vec.y; 
+        live_stars[i].z = vec.z;
     }
 
     ObservedTriangle triangles[20];
     uint16_t num_triangles = 0;
+    
+    // Build the triangles from the 5 live stars
     build_triangles(live_stars, 5, triangles, &num_triangles);
 
     MatchedStar final_matches[5];
-    match_stars(triangles, num_triangles, 5, final_matches);
+    
+    // FIX: Pass all 5 arguments matching star_matcher.h exactly
+    match_stars(live_stars, triangles, num_triangles, 5, final_matches);
 
     // 3. ASSERT: Grade the answers
     for (int i = 0; i < 5; i++) {

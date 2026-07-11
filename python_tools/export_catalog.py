@@ -26,7 +26,7 @@ MAX_FOV_DEGREES = 25.0
 MAX_DIAGONAL_DEG = MAX_FOV_DEGREES * np.sqrt(2)
 
 # Start low. Increase if coverage fails in simulation, decrease if MCU memory blows up.
-KNN_NEIGHBORS = 8                
+KNN_NEIGHBORS = 12                
 
 # Path Logic
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))

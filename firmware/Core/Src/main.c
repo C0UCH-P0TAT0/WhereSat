@@ -1,6 +1,6 @@
 /**
  * @file main.c
- * @brief Final ADCS Pipeline - Robust HIL Mode with NaN Guards, Non-Blocking Trace, Frame-Drop Recovery, and Jackknife Fallback.
+ * @brief Final ADCS Pipeline - Robust HIL Mode with NaN Guards, Non-Blocking Trace, Frame-Drop Recovery, and Jackknife Fallback (3-Axis MEKF).
  * @author Aditya (WhereSat Team)
  */
 
@@ -37,7 +37,7 @@ extern UART_HandleTypeDef huart2;
 #define WARMUP_FRAMES              10
 
 /* TARGET: 45-degree rotation around the Y-axis [x, y, z, w] */
-#define TARGET_QUATERNION       {0.382683f, 0.0f, 0.0f, 0.923880f}
+#define TARGET_QUATERNION       {0.855121f, -0.458259f, -0.238438f, 0.043744f}
 
 #define MAX_STARS_INTERNAL      12
 #define MAX_TRIANGLES_INTERNAL  260 
@@ -48,7 +48,8 @@ extern UART_HandleTypeDef huart2;
 /* Static Pipeline Buffers (Prevent Stack Overflow) --------------------------*/
 static FPGA_Packet_t current_packet;
 static Vector3_t gyro_data;
-static ObservedStar live_stars[MAX_STARS_INTERNAL];
+/* Renamed to observed_stars to match star_matcher.c external references */
+static ObservedStar observed_stars[MAX_STARS_INTERNAL]; 
 static ObservedTriangle triangles[MAX_TRIANGLES_INTERNAL];
 static MatchedStar final_matches[MAX_STARS_INTERNAL];
 static QUEST_Input_t quest_data;
@@ -103,7 +104,7 @@ void build_quest_input(void) {
     quest_data.count = 0;
     for (int i = 0; i < current_packet.count; i++) {
         if (final_matches[i].is_matched && !star_blacklisted[i]) {
-            quest_data.body_v[quest_data.count] = (Vector3_t){live_stars[i].x, live_stars[i].y, live_stars[i].z};
+            quest_data.body_v[quest_data.count] = (Vector3_t){observed_stars[i].x, observed_stars[i].y, observed_stars[i].z};
             catalog_get_star_vector(final_matches[i].hip_id, &quest_data.reference_v[quest_data.count]);
             quest_data.weights[quest_data.count] = 1.0f;
             quest_data.count++;
@@ -168,17 +169,19 @@ int main(void) {
 
         for (int i = 0; i < current_packet.count; i++) {
             Vector3_t vec = pixel_to_vector(current_packet.centroids[i]);
-            live_stars[i] = (ObservedStar){.local_id = i, .x = vec.x, .y = vec.y, .z = vec.z};
+            observed_stars[i] = (ObservedStar){.local_id = i, .x = vec.x, .y = vec.y, .z = vec.z};
         }
         
         uint16_t num_triangles = 0;
-        build_triangles(live_stars, current_packet.count, triangles, &num_triangles);
+        build_triangles(observed_stars, current_packet.count, triangles, &num_triangles);
         
+        /* Initial Matching - match_stars now handles its own verbose logging internally */
         /* Initial Matching - Run ONCE per frame */
-        match_stars(triangles, num_triangles, current_packet.count, final_matches);
-        
+        match_stars(observed_stars, triangles, num_triangles, current_packet.count, final_matches);
+
         bool locked = false;
         uint8_t final_star_count = 0;
+        float innovation_dot = 0.0f; 
 
         /* Step 5: Robust QUEST with Jackknife Fallback */
         build_quest_input();
@@ -189,6 +192,7 @@ int main(void) {
             /* Guard: Check validity BEFORE math */
             if (quat_is_valid(estimated_q)) {
                 float dot_global = quat_dot(filter.q, estimated_q);
+                innovation_dot = dot_global;
 
                 if (frame_count <= WARMUP_FRAMES || dot_global >= QUEST_INNOVATION_THRESHOLD) {
                     locked = true;
@@ -212,6 +216,7 @@ int main(void) {
                                 if (dot_sub >= QUEST_INNOVATION_THRESHOLD) {
                                     printf("Step 5: Jackknife Success (Dropped Star %d, dot=%.3f)\r\n", i, dot_sub);
                                     estimated_q = q_sub;
+                                    innovation_dot = dot_sub;
                                     final_star_count = quest_data.count;
                                     locked = true;
                                     break; 
@@ -235,9 +240,12 @@ int main(void) {
             printf("Step 5: FALLBACK - Prediction only frame.\r\n");
         }
 
-        Vector3_t omega_corr = {gyro_data.x - filter.beta[0], gyro_data.y - filter.beta[1], gyro_data.z - filter.beta[2]};
+        /* Bias has been removed; pass raw gyro directly to controller */
+        Vector3_t omega_corr = gyro_data; 
         Vector3_t torque = controller_compute_torque(&adcs_controller, filter.q, target_q, omega_corr);
-        telemetry_send(&filter.q, &omega_corr, &torque, locked, final_star_count);
+        
+        /* Updated telemetry function call to reflect bias removal */
+        telemetry_send(&filter.q, &omega_corr, &torque, &estimated_q, &gyro_data, innovation_dot, locked, final_star_count);
 
         HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
     }

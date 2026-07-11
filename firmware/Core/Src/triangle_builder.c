@@ -89,16 +89,7 @@ void build_triangles(const ObservedStar *stars, uint8_t num_stars,
                 sort_triangle_angles(out_triangles[triangle_count].angles);
 
                 // --- DEBUG TRACE: Print first 10 triangles ---
-                if (triangle_count < 10) {
-                    printf("  [Tri %u] Stars(%d,%d,%d) | Fingerprint: [%.6f, %.6f, %.6f]\r\n",
-                           triangle_count,
-                           out_triangles[triangle_count].star_indices[0],
-                           out_triangles[triangle_count].star_indices[1],
-                           out_triangles[triangle_count].star_indices[2],
-                           out_triangles[triangle_count].angles[0],
-                           out_triangles[triangle_count].angles[1],
-                           out_triangles[triangle_count].angles[2]);
-                }
+            
 
                 triangle_count++;
             }

@@ -1,9 +1,8 @@
 /**
  * @file mekf.h
- * @brief 6-State Multiplicative Extended Kalman Filter.
+ * @brief 3-State Multiplicative Extended Kalman Filter.
  *
- * Estimates attitude error and gyro bias. Uses a 100Hz prediction loop
- * and a variable-rate update loop (Star Tracker).
+ * Estimates attitude error only (gyro bias removed).
  *
  * @author Aditya (WhereSat Team)
  */
@@ -16,10 +15,8 @@
 
 typedef struct {
     Quaternion_t q;          // Estimated attitude (Inertial to Body)
-    float beta[3];           // Gyro bias estimate [rad/s]
-    float P[6][6];           // Covariance matrix
+    float P[3][3];           // Covariance matrix (3x3 for attitude error)
     float Q_v;               // Gyro noise variance
-    float Q_u;               // Bias random walk variance
 } MEKF_t;
 
 void mekf_init(MEKF_t *f, Quaternion_t initial_q);

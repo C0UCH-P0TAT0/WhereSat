@@ -16,10 +16,6 @@
 #define JACOBI_EPSILON        1e-7f
 #define QUEST_MIN_STARS       2
 
-/* Toggle this to 0 if the satellite spins the wrong way in HIL.
-   1 = Body-to-ECI, 0 = ECI-to-Body */
-#define OUTPUT_BODY_TO_ECI    1 
-
 /* --- Private Function Prototypes --- */
 static bool jacobi_4x4(float A[4][4], float V[4][4]);
 
@@ -115,21 +111,20 @@ Quaternion_t quest_compute(QUEST_Input_t *input) {
 
     float B[3][3] = {{0.0f}};
 
-    /* 2. Build Attitude Profile Matrix B = Σ w * r * b^T */
+    /* 2. Build Attitude Profile Matrix B = Σ w * b * r^T (Yields Body-to-ECI directly) */
     for (int k = 0; k < input->count; k++) {
         float w = input->weights[k];
         Vector3_t r = input->reference_v[k];
         Vector3_t b = input->body_v[k];
 
-        // Input payload corruption guard explicitly returning NAN
         if (isnan(r.x) || isnan(r.y) || isnan(r.z) || isnan(b.x) || isnan(b.y) || isnan(b.z)) {
             printf("QUEST ERROR: NaN detected in input vectors. Index: %d\r\n", k);
             return (Quaternion_t){NAN, NAN, NAN, NAN};
         }
 
-        B[0][0] += w * r.x * b.x; B[0][1] += w * r.x * b.y; B[0][2] += w * r.x * b.z;
-        B[1][0] += w * r.y * b.x; B[1][1] += w * r.y * b.y; B[1][2] += w * r.y * b.z;
-        B[2][0] += w * r.z * b.x; B[2][1] += w * r.z * b.y; B[2][2] += w * r.z * b.z;
+        B[0][0] += w * b.x * r.x; B[0][1] += w * b.x * r.y; B[0][2] += w * b.x * r.z;
+        B[1][0] += w * b.y * r.x; B[1][1] += w * b.y * r.y; B[1][2] += w * b.y * r.z;
+        B[2][0] += w * b.z * r.x; B[2][1] += w * b.z * r.y; B[2][2] += w * b.z * r.z;
     }
 
     /* 3. Compute S, Sigma (trace), and Z vector */
@@ -195,14 +190,7 @@ Quaternion_t quest_compute(QUEST_Input_t *input) {
         return (Quaternion_t){NAN, NAN, NAN, NAN};
     }
 
-    /* 9. Frame Inversion Toggle via Conjugation */
-    #if OUTPUT_BODY_TO_ECI
-        out.x = -out.x;
-        out.y = -out.y;
-        out.z = -out.z;
-    #endif
-
-    /* 10. Canonical form: Ensure scalar part (w) is positive */
+    /* 9. Canonical form: Ensure scalar part (w) is positive */
     if (out.w < 0.0f) {
         out.x = -out.x;
         out.y = -out.y;
