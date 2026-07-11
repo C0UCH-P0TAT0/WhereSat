@@ -1,6 +1,6 @@
 /**
  * @file mekf.c
- * @brief 6-State MEKF Implementation.
+ * @brief 6-State MEKF Implementation (Silent Math Engine).
  *
  * Features: Scalar-last convention, Joseph-form update, symmetry enforcement,
  * and singularity-protected 3x3 matrix inversion.
@@ -11,6 +11,7 @@
 #include "mekf.h"
 #include <math.h>
 #include <string.h>
+#include <stdio.h>
 
 #define MEKF_SMALL_ANGLE 1e-8f
 
@@ -18,13 +19,14 @@
 
 /**
  * @brief Singularity-protected 3x3 Matrix Inversion.
+ * Returns false if the matrix is singular (determinant near zero).
  */
 static bool mat3_inv(float m[3][3], float inv[3][3]) {
     float det = m[0][0]*(m[1][1]*m[2][2] - m[1][2]*m[2][1]) -
                 m[0][1]*(m[1][0]*m[2][2] - m[1][2]*m[2][0]) +
                 m[0][2]*(m[1][0]*m[2][1] - m[1][1]*m[2][0]);
 
-    if (fabsf(det) < 1e-12f) return false; // Singularity protection
+    if (fabsf(det) < 1e-12f) return false;
 
     float invDet = 1.0f / det;
     inv[0][0] = (m[1][1]*m[2][2] - m[1][2]*m[2][1]) * invDet;
@@ -40,7 +42,7 @@ static bool mat3_inv(float m[3][3], float inv[3][3]) {
 }
 
 /**
- * @brief Enforces symmetry on the 6x6 covariance matrix.
+ * @brief Enforces symmetry on the 6x6 covariance matrix to prevent numerical drift.
  */
 static void mekf_enforce_symmetry(MEKF_t *f) {
     for (int i = 0; i < 6; i++) {
@@ -56,18 +58,22 @@ void mekf_init(MEKF_t *f, Quaternion_t initial_q) {
     f->q = quat_normalize(initial_q);
     memset(f->beta, 0, sizeof(f->beta));
     memset(f->P, 0, sizeof(f->P));
+    
+    // Initial uncertainties
     for(int i=0; i<3; i++) f->P[i][i] = 0.1f;
     for(int i=3; i<6; i++) f->P[i][i] = 0.001f;
 
-    f->Q_v = 1e-3f; // Gyro noise variance
-    f->Q_u = 3e-10f; // Bias random walk variance
+    // Process noise parameters
+    f->Q_v = 1e-3f; 
+    f->Q_u = 3e-10f;
 }
 
 void mekf_predict(MEKF_t *f, Vector3_t omega_meas, float dt) {
+    // 1. Bias Correction
     Vector3_t w = {omega_meas.x - f->beta[0], omega_meas.y - f->beta[1], omega_meas.z - f->beta[2]};
     float w_mag = sqrtf(w.x*w.x + w.y*w.y + w.z*w.z);
 
-    // 1. Quaternion Propagation (Scalar-Last)
+    // 2. Quaternion Propagation (Scalar-Last)
     Quaternion_t dq;
     if (w_mag < MEKF_SMALL_ANGLE) {
         dq.w = 1.0f;
@@ -84,7 +90,7 @@ void mekf_predict(MEKF_t *f, Vector3_t omega_meas, float dt) {
     }
     f->q = quat_normalize(quat_multiply(f->q, dq));
 
-    // 2. Covariance Prediction: P = Phi*P*Phi^T + Q*dt
+    // 3. Covariance Prediction: P = Phi*P*Phi^T + Q*dt
     float Phi[6][6] = {0};
     for(int i=0; i<6; i++) Phi[i][i] = 1.0f;
     Phi[0][1] =  w.z*dt; Phi[0][2] = -w.y*dt;
@@ -122,7 +128,11 @@ void mekf_update(MEKF_t *f, Quaternion_t q_meas, float r_noise) {
     for(int i=0; i<3; i++) {
         for(int j=0; j<3; j++) S[i][j] = f->P[i][j] + (i==j ? r_noise : 0.0f);
     }
-    if (!mat3_inv(S, S_inv)) return;
+    
+    if (!mat3_inv(S, S_inv)) {
+        printf("Step 6: MEKF UPDATE FAILED (S matrix singular)\r\n");
+        return;
+    }
 
     float K[6][3] = {0};
     for(int i=0; i<6; i++) {
@@ -161,7 +171,6 @@ void mekf_update(MEKF_t *f, Quaternion_t q_meas, float r_noise) {
             f->P[i][j] = val;
         }
     }
-    // Add KRK^T (R is scalar r_noise)
     for(int i=0; i<6; i++) {
         for(int j=0; j<6; j++) {
             for(int k=0; k<3; k++) f->P[i][j] += K[i][k] * r_noise * K[j][k];

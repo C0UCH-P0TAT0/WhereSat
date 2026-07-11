@@ -4,36 +4,48 @@ import subprocess
 import os
 import struct
 import time
+import itertools
+import pickle
 from scipy.spatial.transform import Rotation as R
 from PyQt5 import QtWidgets, QtCore, QtGui
 import pyqtgraph as pg
 
-# Import your unchanged renderer
+# Import your modules
 from wheresat.renderer import render_star_field
+from wheresat.star_id import identify_stars, calculate_triangle_fingerprint, pixels_to_vectors
 
-# --- System Constants ---
-SERIAL_PORT = 'COM3' 
+# --- 0. Control Center Toggles ---
+# FLIP THIS TO -1.0 IF THE SATELLITE ACCELERATES AWAY FROM THE TARGET
+TORQUE_POLARITY = 1.0 
+
+# --- 1. Protocol Constants ---
+SOF_HOST              = 0x55  
+SOF_TELEM             = 0xAA  
+TELEMETRY_PACKET_SIZE = 45    
+MAX_CENTROIDS         = 26    
+
+# --- 2. System & Camera Constants ---
+SERIAL_PORT = 'COM12' 
 BAUD_RATE   = 115200
-HIL_DT      = 0.1  # 10Hz loop to match STM32
+HIL_DT      = 0.1 
+IMAGE_WIDTH = 1024
+CAMERA_FOV  = 25.0
+FOCAL_LENGTH    = (IMAGE_WIDTH / 2.0) / np.tan(np.radians(CAMERA_FOV) / 2.0)
+PRINCIPAL_POINT = 512.0
 
-# --- Camera & Image Constants ---
-IMAGE_WIDTH      = 1024
-FOCAL_LENGTH     = 1024.0
-PRINCIPAL_POINT  = 512.0
-MAX_CENTROIDS    = 26
-
-# --- Protocol Constants ---
-SOF_HOST              = 0x55
-SOF_TELEM             = 0xAA
-TELEMETRY_PACKET_SIZE = 45  # [SOF][4Q][3W][3T][L][C][CRC16]
-
-# --- Paths ---
-XSIM_DIR     = r"C:\Users\a\Desktop\WhereSat\fpga\build\WhereSat\WhereSat.sim\sim_1\behav\xsim"
-CATALOG_PATH = r"C:\Users\a\Desktop\WhereSat\data\optimized_catalog.npy"
-MEM_OUT_PATH = os.path.join(XSIM_DIR, "tb_frame.mem")
+# --- 3. Paths ---
+XSIM_DIR       = r"C:\Users\DELL\Desktop\WhereSat\fpga\build\WhereSat\WhereSat.sim\sim_1\behav\xsim"
+CATALOG_PATH   = r"C:\Users\DELL\Desktop\WhereSat\data\optimized_catalog.npy"
+DB_TREE_PATH   = r"C:\Users\DELL\Desktop\WhereSat\data\triangle_tree.pkl" 
+DB_MAP_PATH    = r"C:\Users\DELL\Desktop\WhereSat\data\triangle_id_map.npy"
+MEM_OUT_PATH   = os.path.join(XSIM_DIR, "tb_frame.mem")
 CENTROIDS_PATH = os.path.join(XSIM_DIR, "rtl_centroids.txt")
+VIVADO_BIN     = r"C:\AMDDesignTools\2025.2\Vivado\bin"
 
-# --- Physics Constants (3U CubeSat) ---
+env = os.environ.copy()
+env["PATH"] = VIVADO_BIN + ";" + env["PATH"]
+
+# --- 4. Physics Constants ---
 J = np.diag([0.05, 0.05, 0.02])
 J_INV = np.linalg.inv(J)
 
@@ -46,53 +58,28 @@ def crc16_ccitt(data: bytes):
     for byte in data:
         crc ^= (byte << 8)
         for _ in range(8):
-            if crc & 0x8000:
-                crc = (crc << 1) ^ 0x1021
-            else:
-                crc <<= 1
+            if crc & 0x8000: crc = (crc << 1) ^ 0x1021
+            else: crc <<= 1
             crc &= 0xFFFF
     return crc
 
 def build_host_packet(centroids, gyro_vec):
-    """
-    Format: [0x55][count][wx, wy, wz][x0, y0, ...][CRC16]
-    """
-    if centroids.size == 0:
-        centroids = np.empty((0, 2))
-        
+    if centroids.size == 0: centroids = np.empty((0, 3))
     count = min(len(centroids), MAX_CENTROIDS)
     header = struct.pack("<BB", SOF_HOST, count)
     gyro = struct.pack("<3f", *gyro_vec)
-    
     payload = bytearray()
     for i in range(count):
-        payload += struct.pack("<HH", int(centroids[i, 0]), int(centroids[i, 1]))
-    
+        payload += struct.pack("<3f", float(centroids[i, 0]), float(centroids[i, 1]), float(centroids[i, 2]))
     full_msg = header + gyro + payload
-    crc = crc16_ccitt(full_msg)
-    return full_msg + struct.pack("<H", crc)
+    return full_msg + struct.pack("<H", crc16_ccitt(full_msg))
 
 def unpack_telemetry(data):
-    """
-    Format: [0xAA][qx, qy, qz, qw][wx, wy, wz][tx, ty, tz][locked][count][CRC16]
-    """
-    if len(data) != TELEMETRY_PACKET_SIZE:
-        return None
-        
-    # Verify CRC (all bytes except the last 2)
+    if len(data) != TELEMETRY_PACKET_SIZE: return None
     received_crc = struct.unpack("<H", data[43:45])[0]
-    if crc16_ccitt(data[:43]) != received_crc:
-        print("[HIL] Telemetry CRC Error!")
-        return None
-    
+    if crc16_ccitt(data[:43]) != received_crc: return None
     res = struct.unpack("<4f3f3fBB", data[1:43])
-    return {
-        'q': np.array(res[0:4]),
-        'w': np.array(res[4:7]),
-        'torque': np.array(res[7:10]),
-        'locked': res[10],
-        'count': res[11]
-    }
+    return {'q_est': np.array(res[0:4]), 'w_est': np.array(res[4:7]), 'torque': np.array(res[7:10]), 'locked': res[10], 'count': res[11]}
 
 # ==========================================================
 # Simulation Logic
@@ -105,144 +92,118 @@ class HILSimulation(QtCore.QThread):
         super().__init__()
         try:
             self.ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=0.1)
-        except serial.SerialException as e:
-            print(f"Serial Error: {e}")
+            print(f"[INIT] Serial Connected: {SERIAL_PORT}")
+        except: 
             self.ser = None
             
         self.catalog = np.load(CATALOG_PATH)
+        try:
+            with open(DB_TREE_PATH, 'rb') as f: self.db_tree = pickle.load(f)
+            self.db_map = np.load(DB_MAP_PATH)
+        except: self.db_tree = None
+
         self.q = np.array([0.0, 0.0, 0.0, 1.0]) 
         self.w = np.array([0.01, 0.01, 0.0])    
         self.running = True
-
-    def project_stars(self):
-        """ Projects 3D catalog stars into 2D camera pixels """
-        rot = R.from_quat(self.q).inv()
-        body_vectors = rot.apply(self.catalog[:, 1:4])
-        
-        # Only stars in front of camera (z > 0)
-        mask = body_vectors[:, 2] > 0
-        visible_vecs = body_vectors[mask]
-        visible_ids = self.catalog[mask, 0]
-        visible_mags = self.catalog[mask, 4]
-        
-        x_pix = (visible_vecs[:, 0] / visible_vecs[:, 2]) * FOCAL_LENGTH + PRINCIPAL_POINT
-        y_pix = (visible_vecs[:, 1] / visible_vecs[:, 2]) * FOCAL_LENGTH + PRINCIPAL_POINT
-        
-        in_fov = (x_pix >= 0) & (x_pix < IMAGE_WIDTH) & (y_pix >= 0) & (y_pix < IMAGE_WIDTH)
-        return np.column_stack((visible_ids[in_fov], x_pix[in_fov], y_pix[in_fov], visible_mags[in_fov]))
+        self.frame_id = 0
 
     def run(self):
         if not self.ser: return
 
         while self.running:
-            # 1. Render
+            self.frame_id += 1
+            print(f"\n[FRAME {self.frame_id}] Starting Cycle...")
+
+            # 1. Project & Render based on TRUE physics state
             visible_stars = self.project_stars()
             img = render_star_field(visible_stars, IMAGE_WIDTH)
+            print(f"  Step 1: Render OK ({len(visible_stars)} stars projected)")
             
-            # 2. Save .mem and clear old results
-            if os.path.exists(CENTROIDS_PATH):
-                os.remove(CENTROIDS_PATH)
-                
+            # 2. Save .mem
+            if os.path.exists(CENTROIDS_PATH): os.remove(CENTROIDS_PATH)
             with open(MEM_OUT_PATH, 'w') as f:
-                for px in img.flatten():
-                    f.write(f"{px:04X}\n")
-                f.flush()
-                os.fsync(f.fileno())
+                for px in img.flatten(): f.write(f"{px:04X}\n")
+                f.flush(); os.fsync(f.fileno())
 
             # 3. Run FPGA Simulation
-            result = subprocess.run("simulate.bat", cwd=XSIM_DIR, shell=True, 
-                                    capture_output=True, text=True)
-            if result.returncode != 0:
-                print(f"[XSIM ERROR]\n{result.stdout}")
-                continue
+            subprocess.run("simulate.bat", cwd=XSIM_DIR, shell=True, env=env, capture_output=True)
+            print(f"  Step 2: XSIM OK")
             
-            # 4. Parse Centroids
-            centroids = np.empty((0, 2))
+            # 4. Parse RTL Centroids
+            rtl_centroids = np.empty((0, 3))
             if os.path.exists(CENTROIDS_PATH):
                 try:
-                    centroids = np.loadtxt(CENTROIDS_PATH)
-                    if centroids.ndim == 1 and centroids.size > 0:
-                        centroids = centroids.reshape(1, -1)
-                except (OSError, ValueError) as e:
-                    print(f"[HIL] Centroid parse error: {e}")
+                    rtl_centroids = np.loadtxt(CENTROIDS_PATH)
+                    if rtl_centroids.ndim == 1 and rtl_centroids.size > 0:
+                        rtl_centroids = rtl_centroids.reshape(1, -1)
+                except: pass
+            print(f"  Step 3: RTL Parse OK ({len(rtl_centroids)} centroids found)")
 
-            # 5. Send to STM32
-            packet = build_host_packet(centroids, self.w)
-            self.ser.write(packet)
+            # 5. Handshake with STM32 (Send TRUE angular velocity as raw gyro)
+            self.ser.reset_input_buffer()
+            self.ser.write(build_host_packet(rtl_centroids, self.w))
+            self.ser.flush()
+            print(f"  Step 4: Data Sent to STM32")
 
             # 6. Wait for Telemetry
             start_wait = time.time()
             telem_received = False
-            
-            while (time.time() - start_wait) < 1.0:
+            while (time.time() - start_wait) < 60.0:
                 byte = self.ser.read(1)
-                # Use byte[0] for modern Python 3 byte comparison
                 if byte and byte[0] == SOF_TELEM:
                     raw_telem = byte + self.ser.read(TELEMETRY_PACKET_SIZE - 1)
-                    
-                    if len(raw_telem) != TELEMETRY_PACKET_SIZE:
-                        print("[HIL] Incomplete telemetry packet received.")
-                        continue
-
                     telem = unpack_telemetry(raw_telem)
                     if telem:
-                        # 7. Physics Update
-                        self.w = telem['w'] 
-                        torque = telem['torque']
-                        
-                        # Euler Integration
-                        dw = J_INV @ (torque - np.cross(self.w, J @ self.w))
+                        # Physics Update: Use true plant states
+                        applied_torque = telem['torque'] * TORQUE_POLARITY
+                        dw = J_INV @ (applied_torque - np.cross(self.w, J @ self.w))
                         self.w += dw * HIL_DT
                         
-                        dq = R.from_rotvec(self.w * HIL_DT)
-                        self.q = (R.from_quat(self.q) * dq).as_quat()
+                        # Integrate true quaternion
+                        self.q = (R.from_quat(self.q) * R.from_rotvec(self.w * HIL_DT)).as_quat()
                         self.q /= np.linalg.norm(self.q) 
                         
+                        # Bundle true states for UI analysis
+                        telem['q_true'] = self.q
+                        telem['w_true'] = self.w
                         telem['image'] = img
+                        telem['frame_id'] = self.frame_id
                         self.sig_update.emit(telem)
                         telem_received = True
+                        print(f"  Step 5: Telemetry OK (Locked: {telem['locked']})")
                     break
             
             if not telem_received:
-                print("[HIL] Telemetry Timeout - Check STM32 Connection")
+                print(f"  [ERROR] STM32 Timeout on Frame {self.frame_id}")
+
+    def project_stars(self):
+        rot = R.from_quat(self.q).inv()
+        body_vectors = rot.apply(self.catalog[:, 1:4])
+        mask = body_vectors[:, 2] > 1e-5
+        visible_vecs = body_vectors[mask]
+        x_pix = PRINCIPAL_POINT + FOCAL_LENGTH * (visible_vecs[:, 0] / visible_vecs[:, 2])
+        y_pix = PRINCIPAL_POINT - FOCAL_LENGTH * (visible_vecs[:, 1] / visible_vecs[:, 2])
+        in_fov = (x_pix >= 0) & (x_pix < IMAGE_WIDTH) & (y_pix >= 0) & (y_pix < IMAGE_WIDTH)
+        return np.column_stack((self.catalog[mask, 0][in_fov], x_pix[in_fov], y_pix[in_fov], self.catalog[mask, 4][in_fov]))
 
     def stop(self):
         self.running = False
-        if self.ser:
-            self.ser.close()
-
-# ==========================================================
-# GUI Implementation
-# ==========================================================
+        if self.ser: self.ser.close()
 
 class WhereSatGUI(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("WhereSat HIL Control Center")
-        self.resize(1200, 800)
-        
+        self.resize(1100, 700)
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
         layout = QtWidgets.QHBoxLayout(central)
-        
         self.img_view = pg.ImageView()
-        self.img_view.ui.histogram.hide()
-        self.img_view.ui.roiBtn.hide()
-        self.img_view.ui.menuBtn.hide()
+        self.img_view.ui.histogram.hide(); self.img_view.ui.roiBtn.hide(); self.img_view.ui.menuBtn.hide()
         layout.addWidget(self.img_view, stretch=2)
-        
-        stats_layout = QtWidgets.QVBoxLayout()
-        layout.addLayout(stats_layout, stretch=1)
-        
-        self.lbl_status = QtWidgets.QLabel("STATUS: BOOTING")
-        self.lbl_status.setStyleSheet("font-size: 18px; font-weight: bold; color: yellow;")
-        stats_layout.addWidget(self.lbl_status)
-
         self.telem_text = QtWidgets.QTextEdit()
-        self.telem_text.setReadOnly(True)
-        self.telem_text.setFont(QtGui.QFont("Consolas", 10))
-        stats_layout.addWidget(self.telem_text)
-        
+        self.telem_text.setReadOnly(True); self.telem_text.setFont(QtGui.QFont("Consolas", 10))
+        layout.addWidget(self.telem_text, stretch=1)
         self.sim = HILSimulation()
         self.sim.sig_update.connect(self.update_ui)
         self.sim.start()
@@ -250,35 +211,35 @@ class WhereSatGUI(QtWidgets.QMainWindow):
     def update_ui(self, data):
         self.img_view.setImage(data['image'].T, autoLevels=True)
         
-        status = "LOCKED" if data['locked'] else "SEARCHING"
-        color = "#00FF00" if data['locked'] else "#FF0000"
-        self.lbl_status.setText(f"STATUS: {status}")
-        self.lbl_status.setStyleSheet(f"font-size: 18px; font-weight: bold; color: {color};")
+        q_target = np.array([0.382683, 0.0, 0.0, 0.923880])
+        q_est = data['q_est']
+        q_true = data['q_true']
+
+        # The 3 diagnostic dot products
+        dot_est = np.sum(q_target * q_est)
+        dot_true = np.sum(q_target * q_true)
+        dot_diff = np.sum(q_true * q_est)
+
+        info = (f"--- ADCS TELEMETRY (Frame {data['frame_id']}) ---\n"
+                f"Stars Matched: {data['count']}\n"
+                f"ADCS Locked:   {'YES' if data['locked'] else 'NO'}\n\n"
+                f"--- QUATERNION DOT DIAGNOSTICS ---\n"
+                f"dot_true (Plant -> Target): {dot_true:.6f}\n"
+                f"dot_est  (MEKF -> Target):  {dot_est:.6f}\n"
+                f"dot_diff (Plant -> MEKF):   {dot_diff:.6f}\n\n"
+                f"--- STATES ---\n"
+                f"q_target: {np.round(q_target, 6)}\n"
+                f"q_est:    {np.round(q_est, 6)}\n"
+                f"q_true:   {np.round(q_true, 6)}\n\n"
+                f"--- RATES & CONTROL ---\n"
+                f"w_est:    {np.round(data['w_est'], 6)}\n"
+                f"w_true:   {np.round(data['w_true'], 6)}\n"
+                f"torque:   {np.round(data['torque'], 6)}")
         
-        info = (
-            f"--- ADCS TELEMETRY ---\n"
-            f"Stars Matched: {data['count']}\n\n"
-            f"Quaternion [x,y,z,w]:\n"
-            f"[{data['q'][0]:.4f}, {data['q'][1]:.4f},\n"
-            f" {data['q'][2]:.4f}, {data['q'][3]:.4f}]\n\n"
-            f"Angular Vel (rad/s):\n"
-            f"X: {data['w'][0]:.5f}\n"
-            f"Y: {data['w'][1]:.5f}\n"
-            f"Z: {data['w'][2]:.5f}\n\n"
-            f"Torque Cmd (Nm):\n"
-            f"X: {data['torque'][0]:.4f}\n"
-            f"Y: {data['torque'][1]:.4f}\n"
-            f"Z: {data['torque'][2]:.4f}"
-        )
         self.telem_text.setText(info)
 
     def closeEvent(self, event):
-        self.sim.stop()
-        self.sim.wait()
-        event.accept()
+        self.sim.stop(); self.sim.wait(); event.accept()
 
 if __name__ == "__main__":
-    app = QtWidgets.QApplication([])
-    gui = WhereSatGUI()
-    gui.show()
-    app.exec_()
+    app = QtWidgets.QApplication([]); gui = WhereSatGUI(); gui.show(); app.exec_()

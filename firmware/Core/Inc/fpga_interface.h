@@ -10,27 +10,31 @@
 
 #ifndef INC_FPGA_INTERFACE_H_
 #define INC_FPGA_INTERFACE_H_
+#include "main.h" 
+#include <stdint.h>
 
-#include "main.h"
-
-#define MAX_CENTROIDS 26
+#define MAX_CENTROIDS 100
 #define FPGA_PACKET_HEADER 0xAA
 
-typedef struct __attribute__((packed)) {
-    float x;
+/**
+ * @brief Centroid using 32-bit floats for subpixel precision.
+ */
+typedef struct {
+    float x; 
     float y;
+    float mass;  
 } Centroid_t;
 
+/**
+ * @brief The unified Data Model for both SPI (FPGA) and UART (Host).
+ * __attribute__((packed)) is critical here to ensure the SPI stream 
+ * maps exactly to the struct members.
+ */
 typedef struct __attribute__((packed)) {
-    uint8_t header;
-    uint8_t count;
-    Centroid_t centroids[MAX_CENTROIDS];
-    uint8_t checksum;
+    uint8_t header;                   // Used by SPI
+    uint8_t count;                    // Used by both
+    Centroid_t centroids[MAX_CENTROIDS]; // 26 * 8 bytes = 208 bytes
+    uint8_t checksum;                 // Used by SPI
 } FPGA_Packet_t;
 
-/* Function Prototypes */
-HAL_StatusTypeDef fpga_receive_centroids(FPGA_Packet_t *packet);
-uint8_t fpga_validate_packet(FPGA_Packet_t *packet);
-void fpga_print_centroids(FPGA_Packet_t *packet);
-
-#endif /* INC_FPGA_INTERFACE_H_ */
+#endif

@@ -73,9 +73,9 @@ bool catalog_get_triangle(uint32_t index, TriangleEntry *out_triangle) {
     out_triangle->angles[1] = CATALOG_TRIANGLES[index][1];
     out_triangle->angles[2] = CATALOG_TRIANGLES[index][2];
     
-    out_triangle->hips[0]   = (uint32_t)CATALOG_TRIANGLES[index][3];
-    out_triangle->hips[1]   = (uint32_t)CATALOG_TRIANGLES[index][4];
-    out_triangle->hips[2]   = (uint32_t)CATALOG_TRIANGLES[index][5];
+    out_triangle->hips[0]   = (uint32_t)CATALOG_TRIANGLE_IDS[index][0];
+    out_triangle->hips[1]   = (uint32_t)CATALOG_TRIANGLE_IDS[index][1];
+    out_triangle->hips[2]   = (uint32_t)CATALOG_TRIANGLE_IDS[index][2];
 
     return true;
 }

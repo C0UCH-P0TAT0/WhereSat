@@ -23,7 +23,7 @@ typedef struct {
 } Vector3_t;
 
 /* Camera Intrinsics (Matched to Python Golden Reference) */
-#define FOCAL_LENGTH_PX 2903.71f // 20-degree FOV
+#define FOCAL_LENGTH_PX 2308.78f // 20-degree FOV
 #define PRINCIPAL_POINT_X 512.0f // Center of 1024x1024 sensor
 #define PRINCIPAL_POINT_Y 512.0f // Center of 1024x1024 sensor
 

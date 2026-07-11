@@ -1,5 +1,9 @@
 #include "star_matcher.h"
 
+#include <stdint.h>
+#include <stdbool.h>
+#include <string.h>
+
 // ---------------------------------------------------------
 // Internal Voting Structure (Static Memory)
 // ---------------------------------------------------------
@@ -9,6 +13,8 @@ typedef struct {
     uint8_t counts[MAX_TRACKED_HIPS];
 } VoteBox;
 
+#define EMPTY_SLOT 0xFFFFFFFF
+
 // ---------------------------------------------------------
 // Helper: Add a vote to a specific local star's ballot box
 // ---------------------------------------------------------
@@ -17,30 +23,33 @@ static void add_vote(VoteBox *box, uint32_t hip_id) {
     for (uint8_t i = 0; i < MAX_TRACKED_HIPS; i++) {
         if (box->hip_ids[i] == hip_id) {
             box->counts[i]++;
-            return; // Vote added, we are done
+            return; 
         }
     }
     
     // 2. If it's not in the box, find an empty slot and add it
     for (uint8_t i = 0; i < MAX_TRACKED_HIPS; i++) {
-        if (box->hip_ids[i] == 0) { // 0 means empty slot
+        if (box->hip_ids[i] == EMPTY_SLOT) { 
             box->hip_ids[i] = hip_id;
             box->counts[i] = 1;
             return;
         }
     }
-    // If the box is full (more than MAX_TRACKED_HIPS unique candidates), 
-    // we just ignore the vote. True matches will get voted in early anyway.
 }
 
-// ---------------------------------------------------------
-// Main Function: Cross-Reference and Match
-// ---------------------------------------------------------
+// Inside match_stars() initialization:
 void match_stars(const ObservedTriangle *triangles, uint16_t num_triangles, 
                  uint8_t num_observed_stars, MatchedStar *out_matches) {
     
-    // Create our ballot boxes (one for each star the camera sees)
-    VoteBox ballot_boxes[MAX_OBSERVED_STARS] = {0}; // Initializes all to 0
+    VoteBox ballot_boxes[MAX_OBSERVED_STARS];
+    
+    // Safely initialize the ballot boxes with the EMPTY_SLOT sentinel
+    for (uint8_t i = 0; i < MAX_OBSERVED_STARS; i++) {
+        for (uint8_t j = 0; j < MAX_TRACKED_HIPS; j++) {
+            ballot_boxes[i].hip_ids[j] = EMPTY_SLOT;
+            ballot_boxes[i].counts[j] = 0;
+        }
+    }
 
     CandidateMatch candidates[MAX_CANDIDATES];
     uint8_t num_candidates;

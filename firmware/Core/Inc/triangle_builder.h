@@ -7,10 +7,10 @@
 // Hardware Constraints & Macros
 // ---------------------------------------------------------
 // The FPGA passes the top 10 brightest stars. 
-#define MAX_OBSERVED_STARS 10
+#define MAX_OBSERVED_STARS 12
 
-// 10 stars can form a maximum of 120 unique triangles (10 Choose 3)
-#define MAX_OBSERVED_TRIANGLES 120 
+// 12 stars can form a maximum of 220 unique triangles (12 Choose 3)
+#define MAX_OBSERVED_TRIANGLES 260 
 
 // ---------------------------------------------------------
 // Data Structures

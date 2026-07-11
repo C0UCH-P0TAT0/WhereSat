@@ -18,7 +18,7 @@
 Vector3_t pixel_to_vector(Centroid_t centroid) {
     Vector3_t v;
     v.x = (centroid.x - PRINCIPAL_POINT_X);
-    v.y = (centroid.y - PRINCIPAL_POINT_Y);
+    v.y = (PRINCIPAL_POINT_Y - centroid.y);
     v.z = FOCAL_LENGTH_PX;
 
     return normalize_vector(v);

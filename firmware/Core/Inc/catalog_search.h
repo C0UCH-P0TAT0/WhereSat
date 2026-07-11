@@ -10,7 +10,7 @@
 // ---------------------------------------------------------
 // The maximum allowed error between the camera's angle and the database's angle.
 // 0.001 radians is roughly 0.057 degrees.
-#define MATCH_TOLERANCE 0.002f
+#define MATCH_TOLERANCE 0.004f
 
 // Maximum number of candidate matches we can store for a single triangle
 #define MAX_CANDIDATES 10

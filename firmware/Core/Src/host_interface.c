@@ -1,11 +1,12 @@
 /**
  * @file host_interface.c
- * @brief Implementation of the HIL binary ingest.
+ * @brief HIL Ingest with Subpixel Floats, Mass, and SWV Tracing.
  */
 
 #include "host_interface.h"
 #include "usart.h"
 #include <string.h>
+#include <stdio.h>
 
 static uint16_t crc16(const uint8_t *data, uint16_t length, uint16_t start_crc) {
     uint16_t crc = start_crc;
@@ -20,46 +21,68 @@ static uint16_t crc16(const uint8_t *data, uint16_t length, uint16_t start_crc) 
 }
 
 HAL_StatusTypeDef host_receive_packet(FPGA_Packet_t *packet, Vector3_t *gyro_out) {
-    uint8_t header[2]; // [SOF, Count]
-    uint16_t received_crc;
-    uint8_t raw_centroids[MAX_CENTROIDS * 4];
+    // Buffer: 2(hdr) + 12(gyro) + 26*12(payload) + 2(crc) = 328 bytes
+    static uint8_t full_packet[512]; 
+    uint8_t *ptr = full_packet;
+    HAL_StatusTypeDef st;
 
-    // 1. Sync: Wait for SOF
+    // 1. Sync SOF
     while (1) {
-        if (HAL_UART_Receive(&huart2, &header[0], 1, HAL_MAX_DELAY) != HAL_OK) return HAL_ERROR;
-        if (header[0] == HOST_SOF) break;
+        st = HAL_UART_Receive(&huart2, ptr, 1, HAL_MAX_DELAY);
+        if (st != HAL_OK) return HAL_ERROR;
+        if (*ptr == HOST_SOF) break;
     }
+    ptr++; 
 
     // 2. Read Count
-    if (HAL_UART_Receive(&huart2, &header[1], 1, 100) != HAL_OK) return HAL_ERROR;
-    uint8_t count = header[1];
-    if (count > MAX_CENTROIDS) return HAL_ERROR;
+    st = HAL_UART_Receive(&huart2, ptr, 1, 100);
+    if (st != HAL_OK) return HAL_ERROR;
+    uint8_t count = *ptr;
+    ptr++;
 
-    // 3. Read Gyro Data (3 floats = 12 bytes)
-    if (HAL_UART_Receive(&huart2, (uint8_t*)gyro_out, 12, 100) != HAL_OK) return HAL_ERROR;
+    // 3. Read Gyro (12 bytes)
+    st = HAL_UART_Receive(&huart2, ptr, 12, 100);
+    if (st != HAL_OK) return HAL_ERROR;
+    memcpy(gyro_out, ptr, 12);
+    ptr += 12;
 
-    // 4. Read Centroids (count * 4 bytes)
-    uint16_t payload_size = count * 4;
-    if (HAL_UART_Receive(&huart2, raw_centroids, payload_size, 500) != HAL_OK) return HAL_ERROR;
-
-    // 5. Read CRC
-    if (HAL_UART_Receive(&huart2, (uint8_t*)&received_crc, 2, 100) != HAL_OK) return HAL_ERROR;
-
-    // 6. CRC Verification (Header + Gyro + Centroids)
-    uint16_t calc = crc16(header, 2, 0xFFFF);
-    calc = crc16((uint8_t*)gyro_out, 12, calc);
-    calc = crc16(raw_centroids, payload_size, calc);
-
-    if (calc != received_crc) return HAL_ERROR;
-
-    // 7. Populate Struct
-    packet->count = count;
-    for (int i = 0; i < count; i++) {
-        uint16_t x_raw = raw_centroids[i*4]   | (raw_centroids[i*4+1] << 8);
-        uint16_t y_raw = raw_centroids[i*4+2] | (raw_centroids[i*4+3] << 8);
-        packet->centroids[i].x = (float)x_raw;
-        packet->centroids[i].y = (float)y_raw;
+    // 4. Read Centroids (count * 12 bytes: X, Y, Mass)
+    uint16_t payload_size = count * 12;
+    if (payload_size > 0) {
+        st = HAL_UART_Receive(&huart2, ptr, payload_size, 500);
+        if (st != HAL_OK) return HAL_ERROR;
+        ptr += payload_size;
     }
 
+    // 5. Read CRC
+    st = HAL_UART_Receive(&huart2, ptr, 2, 100);
+    if (st != HAL_OK) return HAL_ERROR;
+    uint16_t received_crc = ptr[0] | (ptr[1] << 8);
+    ptr += 2;
+
+    uint16_t total_len = ptr - full_packet;
+
+    // --- SWV PACKET INSPECTOR ---
+    printf("\r\n[RX] PACKET RECEIVED - %d bytes\r\n", total_len);
+    printf("  Header: %02X %02X | Gyro: %.3f %.3f %.3f\r\n", 
+           full_packet[0], full_packet[1], gyro_out->x, gyro_out->y, gyro_out->z);
+    
+    // 6. Verify CRC
+    uint16_t calc = crc16(full_packet, total_len - 2, 0xFFFF);
+    if (calc != received_crc) {
+        printf("  [ERROR] CRC MISMATCH! (Calc: %04X, Recv: %04X)\r\n", calc, received_crc);
+        return HAL_ERROR;
+    }
+
+    // 7. Unpack
+    packet->count = count;
+    uint8_t *payload_ptr = &full_packet[14];
+    for (int i = 0; i < count; i++) {
+        memcpy(&packet->centroids[i].x,    &payload_ptr[i*12],     4);
+        memcpy(&packet->centroids[i].y,    &payload_ptr[i*12 + 4], 4);
+        memcpy(&packet->centroids[i].mass, &payload_ptr[i*12 + 8], 4);
+    }
+
+    printf("  [RESULT] CRC OK. Packet Unpacked.\r\n");
     return HAL_OK;
 }

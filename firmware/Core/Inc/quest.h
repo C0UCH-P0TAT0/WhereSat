@@ -10,7 +10,8 @@
 
 #include "quaternion.h"
 
-#define MAX_QUEST_VECTORS 10
+/* Increased from 10 to 16 to safely handle up to 12 stars and prevent buffer overflow */
+#define MAX_QUEST_VECTORS 16
 
 /**
  * @brief Structure to hold observation and reference vector pairs.
