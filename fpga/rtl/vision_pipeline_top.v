@@ -13,7 +13,7 @@ module vision_pipeline_top #(
     
     output wire [23:0] centroid_x,
     output wire [23:0] centroid_y,
-    output wire [23:0] centroid_m00, // <--- ADD THIS PORT
+    output wire [23:0] centroid_m00, 
     output wire        centroid_valid,
     input  wire        centroid_ready,
     output wire        processing_done 
@@ -48,7 +48,7 @@ module vision_pipeline_top #(
         .frame_done(frame_done),
         .centroid_x(centroid_x), 
         .centroid_y(centroid_y),
-        .centroid_m00(centroid_m00), // <--- CONNECT THIS PORT
+        .centroid_m00(centroid_m00), 
         .centroid_valid(centroid_valid), 
         .centroid_ready(centroid_ready),
         .processing_done(processing_done)

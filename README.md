@@ -1,42 +1,99 @@
-# Stellar Attitude Determination Pipeline
+# 🚀 WhereSat – FPGA Accelerated Star Tracker & ADCS
 
-## 🛰️ Objective
-This project implements a complete, closed-loop star tracker simulation pipeline in Python.
-Designed as a benchmarking tool to characterize attitude-solving algorithms under realistic hardware conditions, it handles everything from synthetic sensor image generation through to spacecraft attitude output. 
+## 🎯 Goal
+WhereSat is an end-to-end spacecraft **Attitude Determination and Control System (ADCS)** featuring a custom FPGA-accelerated Star Tracker. The project combines computer vision, embedded systems, estimation theory, and spacecraft control to estimate spacecraft orientation and generate reaction wheel control commands. :contentReference[oaicite:0]{index=0}
 
-The current architecture simulates a 3D coordinate universe, projects it onto a 2D sensor array, and strictly models the optical physics and electrical noise of a space-rated analog sensor.
+---
 
-## ⚙️ System Specifications
-The simulation engine is hardcoded to the following parameters to accurately replicate edge-hardware constraints:
+## ✨ Features
 
-**Optical & Camera Model**
-* **Catalog:** Hipparcos (VizieR)
-* **Magnitude Limit:** <= 6.0
-* **Camera Resolution:** 1024 x 1024 pixels
-* **Field of View (FOV):** 12.0°
-* **Point Spread Function (PSF):** 2D Gaussian ($\sigma$ = 1.5 pixels)
+- ⭐ Synthetic star field generation
+- 📷 Realistic sensor noise simulation
+- ⚡ FPGA-based centroid extraction
+- 🌌 Lost-in-Space star identification
+- 🛰️ QUEST attitude determination
+- 📐 Multiplicative Extended Kalman Filter (MEKF)
+- 🎯 PD attitude controller
+- 🔧 Hardware verification between Python and FPGA RTL
 
-**Hardware Sensor Noise Model**
-* **Dynamic Range:** 16-bit Unsigned Integer (`np.uint16` / Max ADU: 65535)
-* **Quantum Noise:** Poisson photon distribution
-* **Readout Noise Floor:** Gaussian ($\sigma$ = 15.0 ADU)
-* **Radiation Defect:** Saturated Hot Pixels (0.1% density)
+---
 
-## 📂 Repository Architecture
-The project is structured as a modular Python package to separate coordinate mathematics from image processing and hardware simulation.
+## 🏗 System Architecture
 
+```
+Synthetic Sky
+      │
+      ▼
+Camera & Sensor Model
+      │
+      ▼
+FPGA Vision Pipeline
+(Threshold → Blob Detection → Centroids)
+      │
+      ▼
+MCU Star Identification
+(Triangle Matching)
+      │
+      ▼
+QUEST
+      │
+      ▼
+MEKF
+      │
+      ▼
+PD Controller
+      │
+      ▼
+Reaction Wheel Torque
+```
+
+---
+
+## ⚙ Technologies
+
+- Python
+- NumPy
+- SciPy
+- Verilog (FPGA)
+- Embedded C
+- STM32
+- Vivado
+- Kalman Filtering
+- Quaternion Mathematics
+- Spacecraft Attitude Dynamics
+
+---
+
+## 📂 Project Modules
+
+- **Simulation** – Synthetic star generation and sensor modelling
+- **FPGA** – Real-time image processing and centroid extraction
+- **MCU** – Star identification, QUEST, MEKF, and control
+- **Verification** – RTL vs Python validation tools
+
+---
+
+## 👥 Team 
+Developed by:
+
+- **Yash Dobariya**
+- **Aditya Malpani**
+
+**WhereSat Project**
 ```text
 wheresat/
-├── data/                  # Ignored in git. Contains raw CSV, optimized .npy, and output visuals
-├── src/
-│   └── wheresat/
-│       ├── __init__.py
-│       ├── catalog.py     # Astropy Hipparcos ingestion and Cartesian (X,Y,Z) vectorization
-│       ├── constants.py   # Shared FOV, resolution, and quaternion conventions
-│       ├── coordinates.py # Earth-Centered Inertial (ECI) to Body frame quaternion math
-│       ├── camera.py      # Pinhole projection (3D to 2D) and spatial filtering
-│       ├── renderer.py    # Optical physics engine (Gaussian PSFs + Poisson noise)
-│       └── sensor.py      # 16-bit hardware noise injection and Matplotlib validation
-├── main.py                # Master flight software entry point
-├── requirements.txt       
-└── README.md
+├── data/
+├── fpga
+│   ├── rtl
+│   ├── tb
+├── mcu
+│   ├── Core
+|       ├── Inc
+|       ├── Src
+│   ├── Drivers
+├── python/
+│   ├── apps
+│   ├── benchmarks
+│   ├── core
+│   ├── tests
+│   ├── tools

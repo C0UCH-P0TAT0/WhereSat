@@ -33,7 +33,7 @@ module threshold_filter #(
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            // The first valid 3x3 center pixel (p11) physically sits at X=2, Y=1
+            
             // due to the 2-row + 2-pixel latency of the upstream line_buffer.
             x_cnt    <= 10'd2;
             y_cnt    <= 10'd1;
@@ -47,8 +47,8 @@ module threshold_filter #(
                 x_cnt    <= 10'd2;
                 y_cnt    <= 10'd1;
                 f_pixel  <= 0;
-                f_x      <= 0; // Clean simulation state
-                f_y      <= 0; // Clean simulation state
+                f_x      <= 0; 
+                f_y      <= 0; 
                 f_valid  <= 0;
             end 
             // 2. Stream Processing

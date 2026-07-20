@@ -88,7 +88,6 @@ module tb_simulation();
             valid_in = 1;
         end
 
-        // Phase 2: Push 2050 dummy pixels (Clear BRAM/Line Buffer delays)
         $display("[TB] Entering dummy pixel phase...");
         for (i = 0; i < 2050; i = i + 1) begin
             @(posedge clk);
